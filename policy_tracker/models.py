@@ -39,7 +39,7 @@ class PolicyVersion(models.Model):
     """
     policy = models.ForeignKey(Policy, on_delete=models.CASCADE, related_name="versions")
     version_number = models.PositiveIntegerField()
-    content = models.TextField()
+    diffDetails = models.TextField()
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
