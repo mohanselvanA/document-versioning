@@ -20,7 +20,9 @@ venv/
 ENV/
 env/
 .venv/
-
+.env
+.env.dev
+.env.prod
 # IDEs and editors
 .vscode/
 .idea/
