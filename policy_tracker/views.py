@@ -3,10 +3,8 @@ import requests
 from decouple import config
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from openai import OpenAI
 from .models import *
 
-OPENAI_API_KEY = config("OPENAI_API_KEY")
 AI_CHAT_URL = config("AI_CHAT_URL")
 
 @csrf_exempt
