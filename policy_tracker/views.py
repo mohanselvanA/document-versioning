@@ -1,66 +1,70 @@
-import json
-import requests
-from decouple import config
+import json, requests
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .models import *
+from django.core.exceptions import ObjectDoesNotExist
 
-AI_CHAT_URL = config("AI_CHAT_URL")
+# Import from our modules
+from .utils.pdf_processor import process_content
+from .services.policy_service import (
+    analyze_policy_content, 
+    link_policy_to_organization, 
+    get_all_policy_titles
+)
 
 @csrf_exempt
 def policy_template_check(request):
+    """
+    Main entry point for policy template checking
+    Handles both PDF and HTML content, prioritizing PDF
+    """
     if request.method != "POST":
         return JsonResponse({"error": "POST method required"}, status=405)
 
     try:
-        org_id = 2
+        # Configuration
+        org_id = 1
+        
+        # Parse request data
         data = json.loads(request.body)
-        content = data.get("content")
+        content_data = data.get("content")
 
-        if not content:
+        if not content_data:
             return JsonResponse({"error": "Content is required"}, status=400)
 
-        all_policies = Policy.objects.all()
-        policy_titles = [policy.title for policy in all_policies]
+        # Process content (PDF prioritized over HTML)
+        processed_content = process_content(content_data)
+        
+        if not processed_content:
+            return JsonResponse({"error": "No extractable content found in PDF or HTML"}, status=400)
 
-        prompt = f"""
-        You are a compliance assistant. Compare the new policy content with the list of existing policy titles.
+        # Get all policy titles from database
+        policy_titles = get_all_policy_titles()
+        
+        if not policy_titles:
+            return JsonResponse({"error": "No policies found in database"}, status=404)
 
-        New Policy Content:
-        {content}
+        # Analyze content with AI service
+        ai_reply = analyze_policy_content(processed_content, policy_titles)
 
-        Existing Policy Titles:
-        {', '.join(policy_titles)}
-
-        Instructions:
-        1. Analyze if the new policy content matches or is very similar to any of the existing policy titles
-        2. If there's a clear match, return ONLY the matching policy title from the list
-        3. If no clear match is found, return "No matching policy found"
-        4. Do not add any explanations, summaries, or additional text
-        5. Return only the exact policy title from the list or "No matching policy found"
-        """
-
-        payload = {"query": prompt}
-        res = requests.post(AI_CHAT_URL, json=payload)
-        res.raise_for_status()
-
-        ai_reply = res.json().get("response", "").strip()
-
-        if ai_reply != "No matching policy found":
+        # If match found, link policy to organization
+        if ai_reply and ai_reply != "No matching policy found":
             try:
-                org = Organization.objects.get(id=org_id)
-                policy = Policy.objects.get(title=ai_reply)
+                link_policy_to_organization(org_id, ai_reply)
+            except ObjectDoesNotExist as e:
+                return JsonResponse({"error": str(e)}, status=404)
+            except Exception as e:
+                # Continue even if linking fails, but return the analysis
+                print(f"Warning: Could not link policy to organization: {str(e)}")
 
-                OrganizationPolicy.objects.get_or_create(
-                    organization=org,
-                    policy=policy
-                )
-            except Organization.DoesNotExist:
-                return JsonResponse({"error": f"Organization {org_id} not found"}, status=404)
-            except Policy.DoesNotExist:
-                return JsonResponse({"error": f"Policy '{ai_reply}' not found in DB"}, status=404)
+        return JsonResponse({
+            "analysis": ai_reply,
+            "processed_content_length": len(processed_content),
+            "status": "success"
+        }, status=200)
 
-        return JsonResponse({"analysis": ai_reply}, status=200)
-
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON data"}, status=400)
+    except requests.RequestException as e:
+        return JsonResponse({"error": f"AI service error: {str(e)}"}, status=503)
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
