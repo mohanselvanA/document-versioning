@@ -3,9 +3,6 @@ from django.utils import timezone
 
 
 class Organization(models.Model):
-    """
-    Stores organization details.
-    """
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=255, unique=True)
     created_at = models.DateTimeField(default=timezone.now)
@@ -16,30 +13,25 @@ class Organization(models.Model):
 
 
 class Policy(models.Model):
-    """
-    Stores base information about a policy.
-    """
     title = models.CharField(max_length=255)
-    description = models.TextField(blank=True, null=True)
+    version = models.CharField(max_length=255)
     created_at = models.DateTimeField(default=timezone.now)
-    # Many-to-many relation through OrganizationPolicy
+    policy_template = models.TextField(blank=True, null=True)
     organizations = models.ManyToManyField(
         Organization,
         through='OrganizationPolicy',
-        related_name='policies_linked'  # <-- Change related_name to avoid conflict
+        related_name='policies_linked'
     )
 
     def __str__(self):
-        return self.title
+        return f"{self.title} v{self.version}"
 
 
 class PolicyVersion(models.Model):
-    """
-    Stores versioned content of a policy.
-    """
     policy = models.ForeignKey(Policy, on_delete=models.CASCADE, related_name="versions")
-    version_number = models.PositiveIntegerField()
-    diffDetails = models.TextField()
+    version_number = models.CharField(max_length=255)
+    diffDetails = models.JSONField()
+    snapshot_html = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -51,9 +43,6 @@ class PolicyVersion(models.Model):
 
 
 class OrganizationPolicy(models.Model):
-    """
-    Reference table that links an organization with a policy.
-    """
     organization = models.ForeignKey(
         Organization, on_delete=models.CASCADE, related_name='organization_policies'
     )
