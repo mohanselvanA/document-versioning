@@ -27,7 +27,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('created_at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='organization_policies', to='policy_tracker.organization')),
+                ('organization', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='organization_policies', to='policies.organization')),
             ],
         ),
         migrations.CreateModel(
@@ -37,13 +37,13 @@ class Migration(migrations.Migration):
                 ('title', models.CharField(max_length=255)),
                 ('description', models.TextField(blank=True, null=True)),
                 ('created_at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('organizations', models.ManyToManyField(related_name='policies_linked', through='policy_tracker.OrganizationPolicy', to='policy_tracker.organization')),
+                ('organizations', models.ManyToManyField(related_name='policies_linked', through='policies.OrganizationPolicy', to='policies.organization')),
             ],
         ),
         migrations.AddField(
             model_name='organizationpolicy',
             name='policy',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='organization_policies', to='policy_tracker.policy'),
+            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='organization_policies', to='policies.policy'),
         ),
         migrations.CreateModel(
             name='PolicyVersion',
@@ -52,7 +52,7 @@ class Migration(migrations.Migration):
                 ('version_number', models.PositiveIntegerField()),
                 ('content', models.TextField()),
                 ('created_at', models.DateTimeField(default=django.utils.timezone.now)),
-                ('policy', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='versions', to='policy_tracker.policy')),
+                ('policy', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='versions', to='policies.policy')),
             ],
             options={
                 'ordering': ['version_number'],
