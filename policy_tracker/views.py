@@ -59,3 +59,34 @@ def policy_template_check(request):
         return JsonResponse({"error": f"AI service error: {str(e)}"}, status=503)
     except Exception as e:
         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
+
+@csrf_exempt
+def create_policy(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+ 
+    try:
+        data = json.loads(request.body)
+        title = data.get("title")
+        html = data.get("html")
+        version = data.get("version")
+       
+        if not title or html is None:
+            return JsonResponse({"error": "title and html are required"}, status=400)
+ 
+        # Validate version is a valid string (not empty)
+        if not version or not version.strip():
+            return JsonResponse({"error": "version is required"}, status=400)
+ 
+        # Remove integer validation since version is now string
+        result = create_or_update_policy_with_version(
+            title=title,
+            html_template=html,
+            version=version.strip()  # Pass the version string from frontend
+        )
+        return JsonResponse({"status": "success", **result})
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON data"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
+ 
