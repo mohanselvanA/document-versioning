@@ -89,4 +89,44 @@ def create_policy(request):
         return JsonResponse({"error": "Invalid JSON data"}, status=400)
     except Exception as e:
         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
- 
+
+@csrf_exempt
+def policy_save(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST method required"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        title = data.get("title")
+        html = data.get("html")
+        version = data.get("version")
+
+        if not title or html is None or version is None:
+            return JsonResponse({"error": "title, html, and version are required"}, status=400)
+
+        # Validate version is a valid string
+        if not version.strip():
+            return JsonResponse({"error": "version is required"}, status=400)
+
+        result = create_or_update_policy_with_version(
+            title=title,
+            html_template=html,
+            version=version.strip()  # Pass the version string from frontend
+        )
+        return JsonResponse({"status": "success", **result})
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON data"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
+
+def policy_version_html(request, policy_id: int, version_number: int):
+    if request.method != "GET":
+        return JsonResponse({"error": "GET method required"}, status=405)
+
+    try:
+        html = reconstruct_policy_html_at_version(policy_id=policy_id, version_number=version_number)
+        return JsonResponse({"policy_id": policy_id, "version_number": version_number, "html": html})
+    except ObjectDoesNotExist as e:
+        return JsonResponse({"error": str(e)}, status=404)
+    except Exception as e:
+        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
