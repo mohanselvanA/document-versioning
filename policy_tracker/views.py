@@ -4,7 +4,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core.exceptions import ObjectDoesNotExist
 from .models import Policy, PolicyVersion
 
-from .utils.pdf_processor import process_content
+from .utils.pdf_processor import process_content, process_content_to_html
 from .services.policy_service import (
     analyze_policy_content, 
     link_policy_to_organization, 
@@ -67,20 +67,44 @@ def create_policy(request):
     try:
         data = json.loads(request.body)
         title = data.get("title")
-        html = data.get("html")
         version = data.get("version")
         
-        if not title or html is None:
-            return JsonResponse({"error": "title and html are required"}, status=400)
+        # Check for new format with files array
+        files = data.get("files", [])
+        content = data.get("content", "")
+        
+        # Check for legacy format with html field
+        html = data.get("html")
+        
+        if not title:
+            return JsonResponse({"error": "title is required"}, status=400)
 
         # Validate version is a valid string (not empty)
         if not version or not version.strip():
             return JsonResponse({"error": "version is required"}, status=400)
 
-        # Remove integer validation since version is now string
+        # Determine HTML content based on request format
+        html_content = None
+        
+        if files and len(files) > 0:
+            # New format: process files (PDF or HTML) and content
+            content_data = {'content': content, 'files': files}
+            html_content = process_content_to_html(content_data)
+            
+            if not html_content:
+                return JsonResponse({"error": "No extractable content found in PDF or HTML files"}, status=400)
+                
+        elif html is not None:
+            # Legacy format: use html field directly
+            html_content = html
+            
+        else:
+            return JsonResponse({"error": "Either html field or files array with content is required"}, status=400)
+
+        # Create or update policy with the processed HTML content
         result = create_or_update_policy_with_version(
             title=title, 
-            html_template=html,
+            html_template=html_content,
             version=version.strip()  # Pass the version string from frontend
         )
         return JsonResponse({"status": "success", **result})
