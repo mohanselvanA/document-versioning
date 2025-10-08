@@ -16,7 +16,7 @@ class Policy(models.Model):
     title = models.CharField(max_length=255)
     version = models.CharField(max_length=255)
     created_at = models.DateTimeField(default=timezone.now)
-    policy_template = models.TextField(blank=True, null=True)
+    policy_template = models.TextField(blank=True, null=True)  # Current template
     organizations = models.ManyToManyField(
         Organization,
         through='OrganizationPolicy',
@@ -30,8 +30,7 @@ class Policy(models.Model):
 class PolicyVersion(models.Model):
     policy = models.ForeignKey(Policy, on_delete=models.CASCADE, related_name="versions")
     version_number = models.CharField(max_length=255)
-    diffDetails = models.JSONField()
-    snapshot_html = models.TextField(blank=True, null=True)
+    diffDetails = models.JSONField()  # Only store diffs, no snapshots
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
