@@ -7,6 +7,36 @@ from ..utils.diff_utils import compute_html_diff, apply_diff
 
 AI_CHAT_URL = config("AI_CHAT_URL")
 
+def format_html_with_ai(raw_html: str) -> str:
+    """
+    Send raw HTML to AI service for proper formatting and styling
+    """
+    prompt = f"""
+    Please convert this raw policy HTML into a properly structured, visually appealing HTML document.
+    
+    Requirements:
+    1. Maintain all the original content and meaning
+    2. Add proper HTML structure with semantic tags
+    3. Include CSS styling for better readability
+    4. Format tables, lists, and sections properly
+    5. Make it responsive and professional-looking
+    6. Keep the same policy content but improve presentation
+    
+    Raw HTML Content:
+    {raw_html}
+    
+    Return ONLY the formatted HTML without any explanations.
+    """
+    
+    payload = {"query": prompt}
+    try:
+        res = requests.post(AI_CHAT_URL, json=payload)
+        res.raise_for_status()
+        return res.json().get("response", "").strip()
+    except Exception as e:
+        print(f"AI formatting failed: {str(e)}")
+        return raw_html 
+
 def analyze_policy_content(content, policy_titles):
     """Send content to AI service for policy analysis"""
     prompt = f"""
@@ -58,92 +88,88 @@ def create_or_update_policy_with_version(title: str, html_template: str, version
     """
     Create a new policy or update an existing one, recording a PolicyVersion diff.
     """
+    # Remove AI formatting for now to debug the issue
+    # formatted_html = format_html_with_ai(html_template)
+    formatted_html = html_template  # Use the HTML directly without AI formatting
+    
     policy, created = Policy.objects.select_for_update().get_or_create(
         title=title,
         defaults={
-            # 'description': description,
-            'policy_template': html_template,
-            'version': version,  # Use the version from frontend
+            'policy_template': formatted_html,
+            'version': version,
         },
     )
 
     if created:
-        # New policy - create first version with the provided version number
-        version_obj = PolicyVersion.objects.create(
+        print(f"Creating new policy: {title} with version: {version}")
+        # New policy - create first version with empty diff
+        old_html = ""
+        new_html = formatted_html
+        
+        diff_json = compute_html_diff(old_html, new_html)
+        
+        PolicyVersion.objects.create(
             policy=policy,
-            version_number=version,  # Use the version from frontend
-            snapshot_html=html_template,
-            diffDetails={
-                'changes': [],
-                'old_num_lines': 0,
-                'new_num_lines': len((html_template or '').splitlines()),
-            },
+            version_number=version,
+            diffDetails=diff_json,
         )
+        print(f"New policy created successfully. Policy ID: {policy.id}")
         return {
             "policy_id": policy.id, 
-            "version_number": version_obj.version_number, 
+            "version_number": version, 
             "created": True,
             "version": policy.version
         }
 
-    # Existing policy: compute diff vs current latest template
-    latest_version = PolicyVersion.objects.filter(policy=policy).order_by('-version_number').first()
-    base_html = policy.policy_template or (latest_version.snapshot_html if latest_version and latest_version.snapshot_html else "")
-
-    diff_json = compute_html_diff(base_html, html_template)
+    print(f"Updating existing policy: {title} from version {policy.version} to {version}")
+    print(f"Old HTML length: {len(policy.policy_template or '')}")
+    print(f"New HTML length: {len(formatted_html)}")
+    
+    # Existing policy: compute diff vs current template
+    old_html = policy.policy_template or ""
+    new_html = formatted_html
+    
+    diff_json = compute_html_diff(old_html, new_html)
+    print(f"Diff computed. Changes: {len(diff_json.get('changes', []))}")
 
     # Update policy current template and version
-    policy.policy_template = html_template
-    policy.version = version  # Update to the new version from frontend
-    # if description is not None:
-    #     policy.description = description
-    
+    policy.policy_template = new_html
+    policy.version = version
     policy.save()
 
-    # Create new PolicyVersion with the provided version number
-    version_obj = PolicyVersion.objects.create(
+    # Create new PolicyVersion with diff only
+    PolicyVersion.objects.create(
         policy=policy,
-        version_number=version,  # Use the version from frontend
+        version_number=version,
         diffDetails=diff_json,
-        snapshot_html=html_template,  # Store snapshot for this version
     )
-
+    
+    print(f"Policy updated successfully. New version: {version}")
     return {
         "policy_id": policy.id, 
-        "version_number": version_obj.version_number, 
+        "version_number": version, 
         "created": False,
         "version": policy.version
     }
 
-
 def reconstruct_policy_html_at_version(policy_id: int, version_number: str) -> str:
     """
-    Return the snapshot HTML for a specific policy version.
-    If snapshot_html is None, reconstruct it by applying diffs from previous versions.
+    Reconstruct policy HTML for a specific version by applying diffs sequentially.
+    Starts from empty and applies all diffs up to the target version.
     """
     try:
-        # Get the specific version directly
-        policy_version = PolicyVersion.objects.get(
-            policy_id=policy_id, 
-            version_number=str(version_number)  # Ensure it's string to match the field
-        )
+        # Get all versions up to and including the target version
+        all_versions = list(PolicyVersion.objects.filter(
+            policy_id=policy_id
+        ).all())
         
-        # If snapshot_html exists, return it directly
-        if policy_version.snapshot_html is not None:
-            return policy_version.snapshot_html
-        
-        # If snapshot_html is None, we need to reconstruct it by applying diffs
-        # Get all versions up to this one, sorted numerically
-        all_versions = list(PolicyVersion.objects.filter(policy_id=policy_id).all())
-        
-        # Sort versions numerically by converting to float
+        # Sort versions numerically
         try:
             versions_sorted = sorted(all_versions, key=lambda x: float(x.version_number))
         except ValueError:
-            # Fallback to string sorting if version numbers can't be converted to float
             versions_sorted = sorted(all_versions, key=lambda x: x.version_number)
         
-        # Find the index of our target version
+        # Find target version index
         target_index = None
         for i, v in enumerate(versions_sorted):
             if v.version_number == str(version_number):
@@ -153,23 +179,10 @@ def reconstruct_policy_html_at_version(policy_id: int, version_number: str) -> s
         if target_index is None:
             raise ObjectDoesNotExist("Requested version does not exist")
         
-        # Start from the first version that has a snapshot
-        base_version = None
-        for i in range(target_index, -1, -1):
-            if versions_sorted[i].snapshot_html is not None:
-                base_version = versions_sorted[i]
-                break
+        # Start from empty HTML and apply all diffs up to target version
+        current_html = ""
         
-        if base_version is None:
-            # No snapshot found, start from empty
-            current_html = ""
-            start_index = 0
-        else:
-            current_html = base_version.snapshot_html
-            start_index = i + 1  # Start applying diffs from next version
-        
-        # Apply diffs from base_version up to target_version
-        for i in range(start_index, target_index + 1):
+        for i in range(target_index + 1):  # Apply all diffs including target version
             if versions_sorted[i].diffDetails:
                 current_html = apply_diff(current_html, versions_sorted[i].diffDetails)
         
