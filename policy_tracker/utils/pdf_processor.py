@@ -291,20 +291,67 @@ def process_content(content_data):
     
     return ""
 
+# def process_content_to_html(content_data):
+#     """Process content and return HTML format - prioritize PDF over HTML"""
+#     # Try to extract PDF first and convert to HTML
+#     pdf_data = extract_pdf_from_content(content_data)
+#     if pdf_data:
+#         html_content = convert_pdf_to_html(pdf_data)
+#         if html_content:
+#             print("Using PDF content converted to HTML")
+#             return html_content
+    
+#     # Fallback to HTML content
+#     html_content = extract_html_from_content(content_data)
+#     if html_content:
+#         print("Using HTML content")
+#         return html_content
+    
+#     return ""
+
+
+
+import os
+
 def process_content_to_html(content_data):
-    """Process content and return HTML format - prioritize PDF over HTML"""
+    """Process content and return HTML format - prioritize PDF over HTML and save it to Downloads folder"""
     # Try to extract PDF first and convert to HTML
     pdf_data = extract_pdf_from_content(content_data)
     if pdf_data:
         html_content = convert_pdf_to_html(pdf_data)
         if html_content:
             print("Using PDF content converted to HTML")
+            save_html_to_downloads(html_content, "converted_from_pdf.html")
             return html_content
     
     # Fallback to HTML content
     html_content = extract_html_from_content(content_data)
     if html_content:
         print("Using HTML content")
+        save_html_to_downloads(html_content, "extracted_html.html")
         return html_content
     
     return ""
+
+
+def save_html_to_downloads(html_content, filename="output.html"):
+    """Save HTML content to user's Downloads folder"""
+    try:
+        # Get user's Downloads folder path
+        downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+        
+        # Ensure Downloads folder exists (it should, but just in case)
+        os.makedirs(downloads_path, exist_ok=True)
+        
+        # Build full file path
+        file_path = os.path.join(downloads_path, filename)
+        
+        # Save HTML content
+        with open(file_path, "w", encoding="utf-8") as file:
+            file.write(html_content)
+        
+        print(f"✅ HTML saved successfully at: {file_path}")
+        return file_path
+    except Exception as e:
+        print(f"❌ Error saving HTML: {e}")
+        return None
