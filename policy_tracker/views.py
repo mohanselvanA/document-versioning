@@ -124,6 +124,9 @@ def policy_save(request):
         html = data.get("html")
         version = data.get("version")
         
+        print(f"Received save request - Title: {title}, Version: {version}")
+        print(f"HTML length: {len(html) if html else 0}")
+        
         if not title or html is None or version is None:
             return JsonResponse({"error": "title, html, and version are required"}, status=400)
 
@@ -134,12 +137,16 @@ def policy_save(request):
         result = create_or_update_policy_with_version(
             title=title, 
             html_template=html,
-            version=version.strip()  # Pass the version string from frontend
+            version=version.strip()
         )
+        print(f"Save result: {result}")
         return JsonResponse({"status": "success", **result})
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON data"}, status=400)
     except Exception as e:
+        print(f"Error in policy_save: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
 
 def policy_version_html(request, policy_id: int, version_number: int):

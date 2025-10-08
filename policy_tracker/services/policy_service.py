@@ -7,6 +7,36 @@ from ..utils.diff_utils import compute_html_diff, apply_diff
 
 AI_CHAT_URL = config("AI_CHAT_URL")
 
+def format_html_with_ai(raw_html: str) -> str:
+    """
+    Send raw HTML to AI service for proper formatting and styling
+    """
+    prompt = f"""
+    Please convert this raw policy HTML into a properly structured, visually appealing HTML document.
+    
+    Requirements:
+    1. Maintain all the original content and meaning
+    2. Add proper HTML structure with semantic tags
+    3. Include CSS styling for better readability
+    4. Format tables, lists, and sections properly
+    5. Make it responsive and professional-looking
+    6. Keep the same policy content but improve presentation
+    
+    Raw HTML Content:
+    {raw_html}
+    
+    Return ONLY the formatted HTML without any explanations.
+    """
+    
+    payload = {"query": prompt}
+    try:
+        res = requests.post(AI_CHAT_URL, json=payload)
+        res.raise_for_status()
+        return res.json().get("response", "").strip()
+    except Exception as e:
+        print(f"AI formatting failed: {str(e)}")
+        return raw_html 
+
 def analyze_policy_content(content, policy_titles):
     """Send content to AI service for policy analysis"""
     prompt = f"""
@@ -57,28 +87,33 @@ def get_all_policy_titles():
 def create_or_update_policy_with_version(title: str, html_template: str, version: str, description: str | None = None) -> dict:
     """
     Create a new policy or update an existing one, recording a PolicyVersion diff.
-    Only stores current template in Policy table, diffs in PolicyVersion.
     """
+    # Remove AI formatting for now to debug the issue
+    # formatted_html = format_html_with_ai(html_template)
+    formatted_html = html_template  # Use the HTML directly without AI formatting
+    
     policy, created = Policy.objects.select_for_update().get_or_create(
         title=title,
         defaults={
-            'policy_template': html_template,  # Store current template
+            'policy_template': formatted_html,
             'version': version,
         },
     )
 
     if created:
-        # New policy - create first version with empty diff (from empty to initial content)
+        print(f"Creating new policy: {title} with version: {version}")
+        # New policy - create first version with empty diff
         old_html = ""
-        new_html = html_template
+        new_html = formatted_html
         
         diff_json = compute_html_diff(old_html, new_html)
         
         PolicyVersion.objects.create(
             policy=policy,
             version_number=version,
-            diffDetails=diff_json,  # Store diff from empty to initial content
+            diffDetails=diff_json,
         )
+        print(f"New policy created successfully. Policy ID: {policy.id}")
         return {
             "policy_id": policy.id, 
             "version_number": version, 
@@ -86,31 +121,36 @@ def create_or_update_policy_with_version(title: str, html_template: str, version
             "version": policy.version
         }
 
+    print(f"Updating existing policy: {title} from version {policy.version} to {version}")
+    print(f"Old HTML length: {len(policy.policy_template or '')}")
+    print(f"New HTML length: {len(formatted_html)}")
+    
     # Existing policy: compute diff vs current template
     old_html = policy.policy_template or ""
-    new_html = html_template
+    new_html = formatted_html
     
     diff_json = compute_html_diff(old_html, new_html)
+    print(f"Diff computed. Changes: {len(diff_json.get('changes', []))}")
 
     # Update policy current template and version
     policy.policy_template = new_html
     policy.version = version
     policy.save()
 
-    # Create new PolicyVersion with diff only (no snapshot)
+    # Create new PolicyVersion with diff only
     PolicyVersion.objects.create(
         policy=policy,
         version_number=version,
-        diffDetails=diff_json,  # Only store the diff
+        diffDetails=diff_json,
     )
-
+    
+    print(f"Policy updated successfully. New version: {version}")
     return {
         "policy_id": policy.id, 
         "version_number": version, 
         "created": False,
         "version": policy.version
     }
-
 
 def reconstruct_policy_html_at_version(policy_id: int, version_number: str) -> str:
     """
