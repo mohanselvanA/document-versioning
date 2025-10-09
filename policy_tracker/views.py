@@ -11,6 +11,7 @@ from .services.policy_service import (
     get_all_policy_titles,
     create_or_update_policy_with_version,
     reconstruct_policy_html_at_version,
+    format_html_with_ai
 )
 
 @csrf_exempt
@@ -59,59 +60,80 @@ def policy_template_check(request):
     except Exception as e:
         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
 
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import json
+
 @csrf_exempt
 def create_policy(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST method required"}, status=405)
 
     try:
+        # Load JSON data
         data = json.loads(request.body)
         title = data.get("title")
         version = data.get("version")
-        
-        # Check for new format with files array
         files = data.get("files", [])
         content = data.get("content", "")
-        
-        # Check for legacy format with html field
         html = data.get("html")
-        
+
+        # Validate required fields
         if not title:
             return JsonResponse({"error": "title is required"}, status=400)
 
-        # Validate version is a valid string (not empty)
         if not version or not version.strip():
             return JsonResponse({"error": "version is required"}, status=400)
 
-        # Determine HTML content based on request format
+        # Determine HTML content
         html_content = None
-        
-        if files and len(files) > 0:
-            # New format: process files (PDF or HTML) and content
-            content_data = {'content': content, 'files': files}
-            html_content = process_content_to_html(content_data)
-            
-            if not html_content:
-                return JsonResponse({"error": "No extractable content found in PDF or HTML files"}, status=400)
-                
-        elif html is not None:
-            # Legacy format: use html field directly
-            html_content = html
-            
-        else:
-            return JsonResponse({"error": "Either html field or files array with content is required"}, status=400)
 
-        # Create or update policy with the processed HTML content
+        if files and len(files) > 0:
+            # New format: process files + content
+            content_data = {"content": content, "files": files}
+            html_content = process_content_to_html(content_data)
+
+            if not html_content:
+                return JsonResponse(
+                    {"error": "No extractable content found in PDF or HTML files"}, status=400
+                )
+
+        elif html is not None:
+            # Legacy format: process html via AI formatting
+            html_result = format_html_with_ai(html)  # returns (status_dict, html_string)
+            status_code = html_result[0].get("status")
+
+            if status_code == 200:
+                # AI formatting succeeded
+                html_content = html_result[1]  # extract HTML string
+            elif status_code == 206:
+                # AI formatting failed, fallback to raw HTML
+                html_content = html
+            else:
+                raise Exception(f"Unexpected AI formatting status: {status_code}")
+
+        else:
+            return JsonResponse(
+                {"error": "Either html field or files array with content is required"}, status=400
+            )
+
+        # Create or update policy with processed HTML
         result = create_or_update_policy_with_version(
-            title=title, 
-            html_template=html_content,
-            version=version.strip()  # Pass the version string from frontend
+            title=title,
+            html_template=html_content,  # always a string
+            version=version.strip()
         )
+
         return JsonResponse({"status": "success", **result})
+
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON data"}, status=400)
+
     except Exception as e:
-        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
+        return JsonResponse(
+            {"error": f"Internal server error: {str(e)}"}, status=500
+        )
+
 
 @csrf_exempt
 def policy_save(request):
