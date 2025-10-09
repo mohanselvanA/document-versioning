@@ -32,10 +32,21 @@ def format_html_with_ai(raw_html: str) -> str:
     try:
         res = requests.post(AI_CHAT_URL, json=payload)
         res.raise_for_status()
-        return res.json().get("response", "").strip()
+        return {
+            "Status": "success",
+            "message": "AI formatting service succeeded",
+            "error": None,
+            "status": 200
+        }, res.json().get("response", "").strip()
     except Exception as e:
         print(f"AI formatting failed: {str(e)}")
-        return raw_html 
+        return {
+            "Status": "error",
+            "message": "AI formatting service failed, using raw HTML",
+            "error": str(e),
+            "status": 206
+        }, raw_html
+
 
 def analyze_policy_content(content, policy_titles):
     """Send content to AI service for policy analysis"""
