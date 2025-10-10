@@ -14,7 +14,7 @@ class Organization(models.Model):
 
 class Policy(models.Model):
     title = models.CharField(max_length=255)
-    latest_version = models.CharField(max_length=255)
+    version = models.CharField(max_length=255)
     policy_template = models.TextField(blank=True, null=True)
     getting_processed_for_approval = models.TextField(blank=True, null=True) 
     is_approved = models.BooleanField(default=False)
