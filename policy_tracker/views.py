@@ -104,8 +104,8 @@ def create_policy(request):
                 # AI formatting succeeded
                 html_content = html_result[1]  # extract HTML string
             elif status_code == 206:
-                # html_content = html
-                raise Exception("AI formatting failed, using raw HTML")
+                html_content = html
+                # raise Exception("AI formatting failed, using raw HTML")
             else:
                 raise Exception(f"Unexpected AI formatting status: {status_code}")
 

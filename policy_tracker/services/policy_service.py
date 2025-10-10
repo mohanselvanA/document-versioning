@@ -267,25 +267,30 @@ def approve_policy_and_create_version(policy_id: int) -> dict:
         print(f"Approving policy: {policy.title} (ID: {policy_id})")
         print(f"Moving content from getting_processed_for_approval to policy_template")
         
-        # Get the old approved template for diff calculation
-        old_html = policy.policy_template or ""
-        new_html = policy.getting_processed_for_approval
+        # Get the content that's being approved
+        new_approved_html = policy.getting_processed_for_approval
         
-        # Check if this is the first approval (policy_template is empty)
-        is_first_approval = not policy.policy_template
-        
-        if is_first_approval:
-            print("First approval for this policy - creating initial version with empty diff")
-            # For first approval, create empty diff since there's no previous version
-            diff_json = {
-                'changes': [],
-                'old_num_lines': 0,
-                'new_num_lines': len(split_html_lines(new_html))
-            }
-        else:
-            # Compute diff between old approved template and new approved template
+        # Check if this is the first approval (no existing approved template)
+        if not policy.policy_template or policy.policy_template.strip() == "":
+            print("First approval for this policy - creating initial version")
+            
+            # For first approval: diff from empty to new content (like original code)
+            old_html = ""
+            new_html = new_approved_html
+            
             diff_json = compute_html_diff(old_html, new_html)
-            print(f"Diff computed. Changes: {len(diff_json.get('changes', []))}")
+            print(f"First approval diff computed. Changes: {len(diff_json.get('changes', []))}")
+            
+            is_first_approval = True
+        else:
+            # For update approval: diff from old approved template to new approved template
+            old_html = policy.policy_template
+            new_html = new_approved_html
+            
+            diff_json = compute_html_diff(old_html, new_html)
+            print(f"Update approval diff computed. Changes: {len(diff_json.get('changes', []))}")
+            
+            is_first_approval = False
         
         # Update policy: move staging to approved, mark as approved, and clear staging
         policy.policy_template = new_html
@@ -293,7 +298,7 @@ def approve_policy_and_create_version(policy_id: int) -> dict:
         policy.is_approved = True
         policy.save()
         
-        # Create PolicyVersion record with the diff
+        # Create PolicyVersion record with the proper diff
         policy_version = PolicyVersion.objects.create(
             policy=policy,
             version_number=policy.version,
@@ -301,14 +306,18 @@ def approve_policy_and_create_version(policy_id: int) -> dict:
         )
         
         print(f"Policy approved successfully. Version: {policy.version}, Version ID: {policy_version.id}")
-        print(f"Staging field cleared and policy marked as approved")
+        print(f"Diff contains {len(diff_json.get('changes', []))} changes")
         
         return {
             "policy_id": policy.id,
             "version_number": policy.version,
             "version_created": True,
-            "is_first_approval": is_first_approval
+            "is_first_approval": is_first_approval,
+            "diff_changes_count": len(diff_json.get('changes', []))
         }
         
     except Policy.DoesNotExist:
         raise ObjectDoesNotExist(f"Policy with ID {policy_id} not found")
+    except Exception as e:
+        print(f"Error in approve_policy_and_create_version: {str(e)}")
+        raise
