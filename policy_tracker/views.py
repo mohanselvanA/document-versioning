@@ -60,10 +60,6 @@ def policy_template_check(request):
     except Exception as e:
         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
 
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-import json
-
 @csrf_exempt
 def create_policy(request):
     if request.method != "POST":
