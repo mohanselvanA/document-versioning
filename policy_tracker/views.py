@@ -9,9 +9,10 @@ from .services.policy_service import (
     analyze_policy_content, 
     link_policy_to_organization, 
     get_all_policy_titles,
-    create_or_update_policy_with_version,
+    create_or_update_policy_for_approval,
     reconstruct_policy_html_at_version,
-    format_html_with_ai
+    format_html_with_ai,
+    approve_policy_and_create_version
 )
 
 @csrf_exempt
@@ -103,8 +104,8 @@ def create_policy(request):
                 # AI formatting succeeded
                 html_content = html_result[1]  # extract HTML string
             elif status_code == 206:
-                # AI formatting failed, fallback to raw HTML
-                html_content = html
+                # html_content = html
+                raise Exception("AI formatting failed, using raw HTML")
             else:
                 raise Exception(f"Unexpected AI formatting status: {status_code}")
 
@@ -113,8 +114,8 @@ def create_policy(request):
                 {"error": "Either html field or files array with content is required"}, status=400
             )
 
-        # Create or update policy with processed HTML
-        result = create_or_update_policy_with_version(
+        # Create or update policy with processed HTML in getting_processed_for_approval
+        result = create_or_update_policy_for_approval(
             title=title,
             html_template=html_content,  # always a string
             version=version.strip()
@@ -152,7 +153,8 @@ def policy_save(request):
         if not version.strip():
             return JsonResponse({"error": "version is required"}, status=400)
 
-        result = create_or_update_policy_with_version(
+        # Use the new approval workflow instead of direct save
+        result = create_or_update_policy_for_approval(
             title=title, 
             html_template=html,
             version=version.strip()
@@ -244,5 +246,26 @@ def get_policy_versions(request, policy_id: int):
         return JsonResponse({"error": "Policy not found"}, status=404)
     except ValueError:
         return JsonResponse({"error": "Invalid version number format"}, status=400)
+    except Exception as e:
+        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
+
+@csrf_exempt
+def approve_policy(request, policy_id: int):
+    if request.method != "GET":
+        return JsonResponse({"error": "GET method required"}, status=405)
+
+    try:
+        # Call the service to approve the policy and create version
+        result = approve_policy_and_create_version(policy_id)
+        
+        return JsonResponse({
+            "status": "success",
+            "message": "Policy approved successfully",
+            "policy_id": policy_id,
+            "version_number": result["version_number"]
+        })
+
+    except ObjectDoesNotExist as e:
+        return JsonResponse({"error": str(e)}, status=404)
     except Exception as e:
         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)

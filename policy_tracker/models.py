@@ -15,8 +15,11 @@ class Organization(models.Model):
 class Policy(models.Model):
     title = models.CharField(max_length=255)
     version = models.CharField(max_length=255)
+    policy_template = models.TextField(blank=True, null=True)  # Approved template
+    getting_processed_for_approval = models.TextField(blank=True, null=True)  # Staging template
+    is_approved = models.BooleanField(default=False)  # Whether current template is approved
     created_at = models.DateTimeField(default=timezone.now)
-    policy_template = models.TextField(blank=True, null=True)  # Current template
+
     organizations = models.ManyToManyField(
         Organization,
         through='OrganizationPolicy',

@@ -3,7 +3,7 @@ from decouple import config
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
 from ..models import Organization, Policy, OrganizationPolicy, PolicyVersion
-from ..utils.diff_utils import compute_html_diff, apply_diff
+from ..utils.diff_utils import compute_html_diff, apply_diff, split_html_lines
 
 AI_CHAT_URL = config("AI_CHAT_URL")
 
@@ -201,3 +201,114 @@ def reconstruct_policy_html_at_version(policy_id: int, version_number: str) -> s
         
     except PolicyVersion.DoesNotExist:
         raise ObjectDoesNotExist(f"Policy version {version_number} not found for policy {policy_id}")
+
+
+@transaction.atomic
+def create_or_update_policy_for_approval(title: str, html_template: str, version: str, description: str | None = None) -> dict:
+    """
+    Create a new policy or update an existing one, but only save to getting_processed_for_approval.
+    Does not create PolicyVersion records until approved.
+    """
+    # Use the HTML directly without AI formatting for now
+    formatted_html = html_template
+    
+    policy, created = Policy.objects.select_for_update().get_or_create(
+        title=title,
+        defaults={
+            'getting_processed_for_approval': formatted_html,
+            'policy_template': "",  # Keep policy_template empty until approved
+            'version': version,
+            'is_approved': False,  # Mark as not approved
+        },
+    )
+
+    if created:
+        print(f"Creating new policy for approval: {title} with version: {version}")
+        print(f"Policy created with ID: {policy.id}, awaiting approval")
+        return {
+            "policy_id": policy.id, 
+            "version_number": version, 
+            "created": True,
+            "version": policy.version,
+            "status": "awaiting_approval"
+        }
+
+    print(f"Updating existing policy for approval: {title} to version {version}")
+    print(f"Old getting_processed_for_approval length: {len(policy.getting_processed_for_approval or '')}")
+    print(f"New getting_processed_for_approval length: {len(formatted_html)}")
+    
+    # Update policy staging template and version, but keep is_approved as False
+    policy.getting_processed_for_approval = formatted_html
+    policy.version = version
+    policy.is_approved = False
+    policy.save()
+
+    print(f"Policy updated for approval successfully. New version: {version}")
+    return {
+        "policy_id": policy.id, 
+        "version_number": version, 
+        "created": False,
+        "version": policy.version,
+        "status": "awaiting_approval"
+    }
+
+@transaction.atomic
+def approve_policy_and_create_version(policy_id: int) -> dict:
+    """
+    Approve a policy by moving getting_processed_for_approval to policy_template,
+    setting is_approved to True, and creating a PolicyVersion record.
+    """
+    try:
+        policy = Policy.objects.select_for_update().get(id=policy_id)
+        
+        if not policy.getting_processed_for_approval:
+            raise ValueError("No content awaiting approval for this policy")
+        
+        print(f"Approving policy: {policy.title} (ID: {policy_id})")
+        print(f"Moving content from getting_processed_for_approval to policy_template")
+        
+        # Get the old approved template for diff calculation
+        old_html = policy.policy_template or ""
+        new_html = policy.getting_processed_for_approval
+        
+        # Check if this is the first approval (policy_template is empty)
+        is_first_approval = not policy.policy_template
+        
+        if is_first_approval:
+            print("First approval for this policy - creating initial version with empty diff")
+            # For first approval, create empty diff since there's no previous version
+            diff_json = {
+                'changes': [],
+                'old_num_lines': 0,
+                'new_num_lines': len(split_html_lines(new_html))
+            }
+        else:
+            # Compute diff between old approved template and new approved template
+            diff_json = compute_html_diff(old_html, new_html)
+            print(f"Diff computed. Changes: {len(diff_json.get('changes', []))}")
+        
+        # Update policy: move staging to approved, mark as approved, and clear staging
+        policy.policy_template = new_html
+        policy.getting_processed_for_approval = None  # Clear the staging field
+        policy.is_approved = True
+        policy.save()
+        
+        # Create PolicyVersion record with the diff
+        policy_version = PolicyVersion.objects.create(
+            policy=policy,
+            version_number=policy.version,
+            diffDetails=diff_json,
+        )
+        
+        print(f"Policy approved successfully. Version: {policy.version}, Version ID: {policy_version.id}")
+        print(f"Staging field cleared and policy marked as approved")
+        
+        return {
+            "policy_id": policy.id,
+            "version_number": policy.version,
+            "version_created": True,
+            "is_first_approval": is_first_approval
+        }
+        
+    except Policy.DoesNotExist:
+        raise ObjectDoesNotExist(f"Policy with ID {policy_id} not found")
