@@ -210,6 +210,123 @@ def extract_html_from_content(content_data):
         return content_data.get('content', '')
     return ""
 
+def html_to_text(html_content):
+    """
+    Convert HTML content to clean text while preserving structure
+    """
+    if not html_content:
+        return ""
+    
+    # Remove script and style elements
+    html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL)
+    html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL)
+    
+    # Replace common HTML tags with appropriate text formatting
+    html_content = re.sub(r'<br\s*/?>', '\n', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'<p[^>]*>', '\n\n', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'</p>', '\n\n', html_content, flags=re.IGNORECASE)
+    
+    # Handle headings
+    html_content = re.sub(r'<h[1-6][^>]*>', '\n\n', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'</h[1-6]>', '\n\n', html_content, flags=re.IGNORECASE)
+    
+    # Handle list items
+    html_content = re.sub(r'<li[^>]*>', '\n• ', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'</li>', '', html_content, flags=re.IGNORECASE)
+    
+    # Remove other HTML tags but preserve content
+    html_content = re.sub(r'<[^>]+>', ' ', html_content)
+    
+    # Handle HTML entities
+    html_content = re.sub(r'&nbsp;', ' ', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'&amp;', '&', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'&lt;', '<', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'&gt;', '>', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'&quot;', '"', html_content, flags=re.IGNORECASE)
+    html_content = re.sub(r'&#39;', "'", html_content, flags=re.IGNORECASE)
+    
+    # Clean up whitespace
+    html_content = re.sub(r'\n\s*\n', '\n\n', html_content)  # Preserve paragraph breaks
+    html_content = re.sub(r'[ \t]+', ' ', html_content)  # Collapse multiple spaces/tabs
+    html_content = re.sub(r'\n +', '\n', html_content)  # Remove spaces after newlines
+    html_content = html_content.strip()
+    
+    return html_content
+
+def extract_text_from_html(html_content):
+    """
+    Extract clean text from HTML content - alias for html_to_text for consistency
+    """
+    return html_to_text(html_content)
+
+def process_content_to_text(content_data):
+    """
+    Process content and return clean text - handles both PDF and HTML input
+    """
+    # Try to extract PDF first
+    pdf_data = extract_pdf_from_content(content_data)
+    if pdf_data:
+        pdf_text = extract_text_from_pdf_preserve_formatting(pdf_data)
+        if pdf_text:
+            print("Using PDF content converted to text")
+            return pdf_text
+    
+    # If content_data is a string, it might be HTML
+    if isinstance(content_data, str):
+        html_text = html_to_text(content_data)
+        if html_text:
+            print("Using HTML content converted to text")
+            return html_text
+    
+    # If content_data is a dict with content field
+    if isinstance(content_data, dict):
+        html_content = content_data.get('content', '')
+        if html_content:
+            html_text = html_to_text(html_content)
+            if html_text:
+                print("Using content field converted to text")
+                return html_text
+    
+    return ""
+
+def process_content_for_llm(content_data):
+    """
+    Process content for LLM consumption - returns clean text suitable for AI processing
+    """
+    text_content = process_content_to_text(content_data)
+    
+    # Additional cleaning for LLM
+    if text_content:
+        # Remove excessive line breaks but preserve paragraphs
+        text_content = re.sub(r'\n{3,}', '\n\n', text_content)
+        # Ensure proper encoding
+        text_content = text_content.encode('utf-8', 'ignore').decode('utf-8')
+    
+    return text_content
+
+def get_content_type(content_data):
+    """
+    Determine the type of content provided
+    Returns: 'pdf', 'html', or 'unknown'
+    """
+    if isinstance(content_data, dict):
+        files = content_data.get('files', [])
+        for file_info in files:
+            if file_info.get('type') == 'application/pdf':
+                return 'pdf'
+        
+        if content_data.get('content'):
+            return 'html'
+    
+    elif isinstance(content_data, str):
+        # Check if it looks like HTML
+        if re.search(r'<[^>]+>', content_data):
+            return 'html'
+        else:
+            return 'text'
+    
+    return 'unknown'
+
 def convert_pdf_to_html(pdf_data):
     """Convert PDF data to HTML format preserving original fonts and formatting"""
     try:

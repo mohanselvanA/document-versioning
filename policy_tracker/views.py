@@ -4,7 +4,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core.exceptions import ObjectDoesNotExist
 from .models import Policy, PolicyVersion
 
-from .utils.pdf_processor import process_content, process_content_to_html
+from .utils.pdf_processor import process_content, extract_pdf_from_content, html_to_text, extract_text_from_pdf_preserve_formatting
 from .services.policy_service import (
     analyze_policy_content, 
     link_policy_to_organization, 
@@ -12,7 +12,8 @@ from .services.policy_service import (
     create_or_update_policy_for_approval,
     reconstruct_policy_html_at_version,
     format_html_with_ai,
-    approve_policy_and_create_version
+    approve_policy_and_create_version,
+    extract_title_version_from_pdf
 )
 
 @csrf_exempt
@@ -71,57 +72,110 @@ def create_policy(request):
         data = json.loads(request.body)
         title = data.get("title")
         version = data.get("version")
-        files = data.get("files", [])
+        files = data.get("file", [])
+
+        if files is not None:
+            files = [{
+            "type": "application/pdf",
+            "data": files,
+            "name": "document.pdf"
+        }]
         content = data.get("content", "")
         html = data.get("html")
 
-        # Validate required fields
-        if not title:
-            return JsonResponse({"error": "title is required"}, status=400)
+        # Determine content to process
+        raw_content = ""
+        content_source = ""
 
-        if not version or not version.strip():
-            return JsonResponse({"error": "version is required"}, status=400)
-
-        # Determine HTML content
-        html_content = None
-
+        # Case 1: Files array with PDF (extract title and version from PDF)
         if files and len(files) > 0:
-            # New format: process files + content
-            content_data = {"content": content, "files": files}
-            html_content = process_content_to_html(content_data)
+            pdf_data = extract_pdf_from_content({"files": files})
+            if pdf_data:
+                pdf_text = extract_text_from_pdf_preserve_formatting(pdf_data)
+                if pdf_text:
+                    raw_content = pdf_text
+                    content_source = "pdf"
+                    print("Using PDF content for LLM processing")
+                    
+                    # Extract title and version from PDF content
+                    extraction_result = extract_title_version_from_pdf(pdf_text)
+                    
+                    # If title/version extraction failed, return error
+                    if extraction_result[0].get("status") != 200:
+                        return JsonResponse({
+                            "status": "error",
+                            "message": extraction_result[0].get("message"),
+                            "missing_fields": extraction_result[0].get("missing_fields", []),
+                            "extracted_data": extraction_result[0].get("extracted_data", {})
+                        }, status=400)
+                    
+                    # Use extracted title and version (override provided ones)
+                    extracted_data = extraction_result[0].get("extracted_data", {})
+                    if not title:
+                        title = extracted_data.get("title")
+                    if not version:
+                        version = extracted_data.get("version")
+                    
+                    print(f"Extracted from PDF - Title: {title}, Version: {version}")
 
-            if not html_content:
-                return JsonResponse(
-                    {"error": "No extractable content found in PDF or HTML files"}, status=400
-                )
+        # Validate required fields after potential PDF extraction
+        # if not title:
+        #     return JsonResponse({"error": "title is required and could not be extracted from PDF"}, status=400)
 
+        # if not version or not version.strip():
+        #     return JsonResponse({"error": "version is required and could not be extracted from PDF"}, status=400)
+
+        # Case 2: Direct HTML field
         elif html is not None:
-            # Legacy format: process html via AI formatting
-            html_result = format_html_with_ai(html)  # returns (status_dict, html_string)
-            status_code = html_result[0].get("status")
-
-            if status_code == 200:
-                # AI formatting succeeded
-                html_content = html_result[1]  # extract HTML string
-            elif status_code == 206:
-                html_content = html
-                # raise Exception("AI formatting failed, using raw HTML")
-            else:
-                raise Exception(f"Unexpected AI formatting status: {status_code}")
-
+            # Convert HTML to text for LLM processing
+            html_text = html_to_text(html)
+            if html_text:
+                raw_content = html_text
+                content_source = "html_field"
+                print("Using HTML field for LLM processing")
+        
+        # Case 3: Only title and version with content field
+        elif content:
+            # Content field provided
+            html_text = html_to_text(content)
+            if html_text:
+                raw_content = html_text
+                content_source = "html_content"
+                print("Using content field for LLM processing")
         else:
-            return JsonResponse(
-                {"error": "Either html field or files array with content is required"}, status=400
-            )
+            # Only title and version provided - LLM will create from scratch
+            raw_content = ""
+            content_source = "metadata_only"
+            print("Only title and version provided - LLM will create policy from scratch")
 
-        # Create or update policy with processed HTML in getting_processed_for_approval
-        result = create_or_update_policy_for_approval(
-            title=title,
-            html_template=html_content,  # always a string
-            version=version.strip()
-        )
-
-        return JsonResponse({"status": "success", **result})
+        # Send content to LLM for policy generation
+        formatting_result = format_html_with_ai(title, version, raw_content, content_source)
+        status_code = formatting_result[0].get("status")
+        
+        if status_code == 200:
+            # LLM formatting succeeded - return HTML directly
+            formatted_html = formatting_result[1]
+            
+            # Return as plain text HTML response
+            return JsonResponse({
+                "status": "success", 
+                "message": formatted_html,
+                "content_source": content_source,
+                "title": title,
+                "version": version
+            }, status=200)
+            
+        elif status_code == 206:
+            # LLM formatting failed
+            return JsonResponse({
+                "status": "error", 
+                "message": "LLM failed to generate policy content",
+                "content_source": content_source,
+                "title": title,
+                "version": version
+            }, status=500)
+        else:
+            raise Exception(f"Unexpected LLM formatting status: {status_code}")
 
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON data"}, status=400)
@@ -130,7 +184,6 @@ def create_policy(request):
         return JsonResponse(
             {"error": f"Internal server error: {str(e)}"}, status=500
         )
-
 
 @csrf_exempt
 def policy_save(request):
