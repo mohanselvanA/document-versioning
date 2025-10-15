@@ -75,18 +75,40 @@ def extract_title_version_from_pdf(pdf_text):
             "extracted_data": {"title": None, "version": None}
         }, None
 
-def format_html_with_ai(title: str, version: str, raw_content: str = "", content_source: str = "metadata_only"):
+def format_html_with_ai(title: str, version: str, raw_content: str = "", content_source: str = "metadata_only", 
+                        department: str = "", category: str = "", approver_1: str = "", approver_2: str = "", 
+                        assignees: str = "", review_date: str = "", expiry_date: str = ""):
     """
-    Send policy information to AI service to generate complete policy HTML
+    Send policy information to AI service to generate complete policy HTML.
+    Dynamically includes optional fields if provided.
     """
-    
+
+    # Prepare optional metadata block
+    metadata_html = ""
+    if department:
+        metadata_html += f"<p><strong>Department:</strong> {department}</p>\n"
+    if category:
+        metadata_html += f"<p><strong>Category:</strong> {category}</p>\n"
+    if approver_1:
+        metadata_html += f"<p><strong>Approver 1:</strong> {approver_1}</p>\n"
+    if approver_2:
+        metadata_html += f"<p><strong>Approver 2:</strong> {approver_2}</p>\n"
+    if assignees:
+        metadata_html += f"<p><strong>Assignees:</strong> {assignees}</p>\n"
+    if review_date:
+        metadata_html += f"<p><strong>Review Date:</strong> {review_date}</p>\n"
+    if expiry_date:
+        metadata_html += f"<p><strong>Expiry Date:</strong> {expiry_date}</p>\n"
+
     if content_source == "metadata_only":
-        # Only title and version provided - create complete policy from scratch
         prompt = f"""
         Create a comprehensive, professional policy document in HTML format with clean, readable styling.
 
         POLICY TITLE: {title}
         VERSION: {version}
+
+        Include the following metadata if present:
+        {metadata_html}
 
         Generate a complete policy document that includes:
 
@@ -129,153 +151,53 @@ def format_html_with_ai(title: str, version: str, raw_content: str = "", content
         Focus on clean, readable content rather than complex styling.
         Include simple CSS within <style> tags in the head section.
         """
-
-    elif content_source == "pdf":
-        # PDF content provided - convert and format into proper policy
+    else:
+        # For pdf or html content sources, include metadata_html in the instructions
         prompt = f"""
-        Transform the extracted PDF content into a clean, professionally formatted policy document in HTML.
+        Transform the provided content into a clean, professionally formatted policy document in HTML.
 
         POLICY TITLE: {title}
         VERSION: {version}
 
-        PDF EXTRACTED CONTENT:
+        Include the following metadata if present:
+        {metadata_html}
+
+        CONTENT TO PROCESS:
         {raw_content[:6000]}
 
-        CONTENT PROCESSING:
-        1. Extract and organize the core policy content from the PDF text
-        2. Structure content into logical policy sections
-        3. Maintain all original policy intent and requirements
-        4. Improve clarity and organization where needed
-        5. Present content in clear left-to-right reading format
-
-        DOCUMENT STRUCTURE:
-        1. Simple, semantic HTML structure
-        2. Clear heading hierarchy
-        3. Left-aligned content throughout
-        4. Proper paragraph spacing and line height
-
-        TABLES (USE SPARINGLY):
-        1. Convert to tables ONLY when content is naturally tabular:
-           - Role/responsibility matrices
-           - Definition lists
-           - Comparison charts
-        2. Keep table styling minimal and functional
-        3. Avoid tables for regular paragraph content
-
-        STYLING:
-        1. Use clean, readable system fonts
-        2. Simple black text on white background
-        3. Adequate margins and padding
-        4. Responsive design
-        5. No complex colors or gradients
+        Ensure content is structured with proper headings, readable typography, and tables only if necessary.
 
         Return ONLY the complete HTML policy document.
-        Focus on content clarity and readability over visual design.
+        Focus on content clarity, readability, and include metadata in the output HTML.
         """
 
-    elif content_source in ["html_content", "html_field"]:
-        # HTML content provided - clean and reformat into proper policy
-        prompt = f"""
-        Clean and reformat the existing HTML content into a professional policy document.
-
-        POLICY TITLE: {title}
-        VERSION: {version}
-
-        ORIGINAL HTML CONTENT:
-        {raw_content[:6000]}
-
-        CONTENT CLEANUP:
-        1. Remove any existing complex styling and colors
-        2. Normalize HTML structure to clean, semantic markup
-        3. Reorganize content into standard policy sections
-        4. Ensure left-to-right reading flow
-        5. Remove any unnecessary visual elements
-
-        STRUCTURE IMPROVEMENT:
-        1. Apply simple, clean CSS styling
-        2. Use system fonts for maximum compatibility
-        3. Ensure proper heading hierarchy
-        4. Left-align all content
-        5. Add adequate spacing for readability
-
-        TABLES (ONLY IF BENEFICIAL):
-        1. Convert to tables ONLY if content is naturally tabular
-        2. Keep table structure simple and minimal
-        3. Use tables for:
-           - Role/responsibility lists
-           - Definition sets
-           - Compliance matrices
-
-        CONTENT QUALITY:
-        1. Maintain original content meaning
-        2. Improve organization and clarity
-        3. Ensure professional policy tone
-        4. Remove any redundant or repetitive content
-
-        Return ONLY the clean, reformatted HTML policy document.
-        Focus on content readability and professional presentation.
-        Keep styling minimal and functional.
-        """
-
-    else:
-        # Fallback case
-        prompt = f"""
-        Create a professional policy document in HTML format.
-
-        POLICY TITLE: {title}
-        VERSION: {version}
-
-        Generate a policy document with:
-
-        CONTENT SECTIONS:
-        1. Purpose and Objectives
-        2. Scope
-        3. Policy Statements
-        4. Responsibilities
-        5. Compliance
-        6. Definitions
-        7. Review Process
-
-        DESIGN:
-        1. Clean, left-aligned layout
-        2. Simple system fonts
-        3. Readable typography
-        4. Responsive design
-
-        TABLES:
-        Use tables only for clearly tabular data like definitions or responsibility matrices.
-
-        Return ONLY the complete HTML document with simple, functional styling.
-        """
-    
     payload = {"query": prompt}
+
     try:
         res = requests.post(AI_CHAT_URL, json=payload)
         res.raise_for_status()
         response_text = res.json().get("response", "").strip()
-        
-        # Clean up the response to ensure it's pure HTML
+
+        # Clean response
         if response_text.startswith('"') and response_text.endswith('"'):
             response_text = response_text[1:-1]
-        
-        # Remove any markdown code blocks if present
         if response_text.startswith('```html'):
             response_text = response_text[7:]
         if response_text.endswith('```'):
             response_text = response_text[:-3]
         response_text = response_text.strip()
-        
-        return {
-            "status": 200,
-            "message": "Policy generated successfully by LLM"
-        }, response_text
-        
+
+        # Optionally slice starting from <h1> for consistency
+        start_index = response_text.find("<h1>")
+        if start_index >= 0:
+            response_text = response_text[start_index:]
+
+        return {"status": 200, "message": "Policy generated successfully by LLM"}, response_text
+
     except Exception as e:
         print(f"AI policy generation failed: {str(e)}")
-        return {
-            "status": 206,
-            "message": f"AI policy generation failed: {str(e)}"
-        }, ""
+        return {"status": 206, "message": f"AI policy generation failed: {str(e)}"}, ""
+
 
 # Keep other existing functions for backward compatibility
 def analyze_policy_content(content, policy_titles):
