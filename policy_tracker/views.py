@@ -16,6 +16,8 @@ from .services.policy_service import (
     extract_title_version_from_pdf
 )
 
+from .utils.diff_utils import compute_html_diff, apply_diff, split_html_lines
+
 @csrf_exempt
 def policy_template_check(request):
     if request.method != "POST":
@@ -140,6 +142,14 @@ def create_policy(request):
 
         if status_code == 200:
             formatted_html = formatting_result[1]
+            
+            # Compute diff details similar to second codebase
+            # For new policy creation, diff from empty to formatted_html
+            old_html = ""
+            new_html = formatted_html
+            diff_details = compute_html_diff(old_html, new_html)
+            print(diff_details)
+            
             response = {
                 **original_payload,  # 👈 ALL original fields included here
                 "status": "success",
@@ -147,10 +157,19 @@ def create_policy(request):
                 "title": title,
                 "version": version,
                 "organization_id": organization_id,
+                "diff_details": diff_details,  # 👈 Add diff details to response
+                "old_num_lines": diff_details.get("old_num_lines", 0),
+                "new_num_lines": diff_details.get("new_num_lines", 0),
+                "changes_count": len(diff_details.get("changes", []))
             }
             return JsonResponse(response, status=200)
 
         elif status_code == 206:
+            # Even if LLM fails, compute diff with the raw content
+            old_html = ""
+            new_html = raw_content
+            diff_details = compute_html_diff(old_html, new_html)
+            
             response = {
                 **original_payload,  # 👈 Again, include everything
                 "status": "error",
@@ -158,6 +177,10 @@ def create_policy(request):
                 "title": title,
                 "version": version,
                 "organization_id": organization_id,
+                "diff_details": diff_details,  # 👈 Add diff details even for error case
+                "old_num_lines": diff_details.get("old_num_lines", 0),
+                "new_num_lines": diff_details.get("new_num_lines", 0),
+                "changes_count": len(diff_details.get("changes", []))
             }
             return JsonResponse(response, status=500)
 
