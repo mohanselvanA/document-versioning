@@ -1,408 +1,157 @@
-# import json, requests
-# from django.http import JsonResponse
-# from django.views.decorators.csrf import csrf_exempt
-# from django.core.exceptions import ObjectDoesNotExist
-# from .models import Policy, PolicyVersion
-
-# from .utils.pdf_processor import process_content, extract_pdf_from_content, html_to_text, extract_text_from_pdf_preserve_formatting
-# from .services.policy_service import (
-#     analyze_policy_content, 
-#     link_policy_to_organization, 
-#     get_all_policy_titles,
-#     create_or_update_policy_for_approval,
-#     reconstruct_policy_html_at_version,
-#     format_html_with_ai,
-#     approve_policy_and_create_version,
-#     extract_title_version_from_pdf
-# )
-
-# from .utils.diff_utils import compute_html_diff, apply_diff, split_html_lines
-
-# @csrf_exempt
-# def policy_template_check(request):
-#     if request.method != "POST":
-#         return JsonResponse({"error": "POST method required"}, status=405)
-
-#     try:
-#         org_id = 1
-        
-#         data = json.loads(request.body)
-#         content = data.get('content', '')
-#         files = data.get('files', [])
-#         content_data = {'content': content, 'files': files}
-
-#         processed_content = process_content(content_data)
-        
-#         if not processed_content:
-#             return JsonResponse({"error": "No extractable content found in PDF or HTML"}, status=400)
-
-#         policy_titles = get_all_policy_titles()
-        
-#         if not policy_titles:
-#             return JsonResponse({"error": "No policies found in database"}, status=404)
-
-#         ai_reply = analyze_policy_content(processed_content, policy_titles)
-
-#         if ai_reply and ai_reply != "No matching policy found":
-#             try:
-#                 link_policy_to_organization(org_id, ai_reply)
-#             except ObjectDoesNotExist as e:
-#                 return JsonResponse({"error": str(e)}, status=404)
-#             except Exception as e:
-#                 print(f"Warning: Could not link policy to organization: {str(e)}")
-
-#         return JsonResponse({
-#             "analysis": ai_reply,
-#             "processed_content_length": len(processed_content),
-#             "status": "success"
-#         }, status=200)
-
-#     except json.JSONDecodeError:
-#         return JsonResponse({"error": "Invalid JSON data"}, status=400)
-#     except requests.RequestException as e:
-#         return JsonResponse({"error": f"AI service error: {str(e)}"}, status=503)
-#     except Exception as e:
-#         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
-
-# @csrf_exempt
-# def create_policy(request):
-#     if request.method != "POST":
-#         return JsonResponse({"error": "POST method required"}, status=405)
-
-#     try:
-#         # Parse and preserve the ENTIRE original request payload
-#         data = json.loads(request.body)
-#         original_payload = data.copy()  # This contains ALL fields: assignees, approver_1, department, etc.
-
-#         # Validate required fields
-#         organization_id = data.get("organization_id")
-#         if not organization_id:
-#             return JsonResponse(
-#                 {**original_payload, "error": "organization_id is required"}, 
-#                 status=400
-#             )
-
-#         # Extract known fields (for processing)
-#         title = data.get("title")
-#         version = data.get("policy_version")
-#         files = data.get("file", [])
-#         content = data.get("content", "")
-#         html = data.get("html")
-
-#         # Process files if present
-#         raw_content = ""
-#         content_source = ""
-
-#         if files:
-#             # Normalize files structure as before
-#             normalized_files = [{
-#                 "type": "application/pdf",
-#                 "data": files,
-#                 "name": "document.pdf"
-#             }]
-#             pdf_data = extract_pdf_from_content({"files": normalized_files})
-#             if pdf_data:
-#                 pdf_text = extract_text_from_pdf_preserve_formatting(pdf_data)
-#                 if pdf_text:
-#                     raw_content = pdf_text
-#                     content_source = "pdf"
-#                     extraction_result = extract_title_version_from_pdf(pdf_text)
-#                     if extraction_result[0].get("status") != 200:
-#                         response = {
-#                             **original_payload,
-#                             "status": "error",
-#                             "message": extraction_result[0].get("message"),
-#                             "missing_fields": extraction_result[0].get("missing_fields", []),
-#                             "extracted_data": extraction_result[0].get("extracted_data", {})
-#                         }
-#                         return JsonResponse(response, status=400)
-
-#                     extracted_data = extraction_result[0].get("extracted_data", {})
-#                     if not title:
-#                         title = extracted_data.get("title")
-#                     if not version:
-#                         version = extracted_data.get("version")
-
-#         elif html is not None:
-#             raw_content = html_to_text(html)
-#             content_source = "html_field"
-#         elif content:
-#             raw_content = html_to_text(content)
-#             content_source = "html_content"
-#         else:
-#             content_source = "metadata_only"
-
-#         # Call LLM
-#         formatting_result = format_html_with_ai(title, version, raw_content, content_source)
-#         status_code = formatting_result[0].get("status")
-
-#         if status_code == 200:
-#             formatted_html = formatting_result[1]
-            
-#             # Compute diff details similar to second codebase
-#             # For new policy creation, diff from empty to formatted_html
-#             old_html = ""
-#             new_html = formatted_html
-#             diff_details = compute_html_diff(old_html, new_html)
-#             print(diff_details)
-            
-#             response = {
-#                 **original_payload,  # 👈 ALL original fields included here
-#                 "status": "success",
-#                 "message": formatted_html,
-#                 "title": title,
-#                 "version": version,
-#                 "organization_id": organization_id,
-#                 "diff_details": diff_details,  # 👈 Add diff details to response
-#                 "old_num_lines": diff_details.get("old_num_lines", 0),
-#                 "new_num_lines": diff_details.get("new_num_lines", 0),
-#                 "changes_count": len(diff_details.get("changes", []))
-#             }
-#             return JsonResponse(response, status=200)
-
-#         elif status_code == 206:
-#             # Even if LLM fails, compute diff with the raw content
-#             old_html = ""
-#             new_html = raw_content
-#             diff_details = compute_html_diff(old_html, new_html)
-            
-#             response = {
-#                 **original_payload,  # 👈 Again, include everything
-#                 "status": "error",
-#                 "message": "LLM failed to generate policy content",
-#                 "title": title,
-#                 "version": version,
-#                 "organization_id": organization_id,
-#                 "diff_details": diff_details,  # 👈 Add diff details even for error case
-#                 "old_num_lines": diff_details.get("old_num_lines", 0),
-#                 "new_num_lines": diff_details.get("new_num_lines", 0),
-#                 "changes_count": len(diff_details.get("changes", []))
-#             }
-#             return JsonResponse(response, status=500)
-
-#         else:
-#             raise Exception(f"Unexpected LLM formatting status: {status_code}")
-
-#     except json.JSONDecodeError:
-#         return JsonResponse({"error": "Invalid JSON data"}, status=400)
-
-#     except Exception as e:
-#         # Even on crash, try to return original data if possible
-#         try:
-#             original = json.loads(request.body)
-#         except:
-#             original = {}
-#         return JsonResponse(
-#             {**original, "error": f"Internal server error: {str(e)}"}, 
-#             status=500
-#         )
-
-# @csrf_exempt
-# def policy_save(request):
-#     if request.method != "POST":
-#         return JsonResponse({"error": "POST method required"}, status=405)
-
-#     try:
-#         data = json.loads(request.body)
-#         title = data.get("title")
-#         html = data.get("html")
-#         version = data.get("version")
-        
-#         print(f"Received save request - Title: {title}, Version: {version}")
-#         print(f"HTML length: {len(html) if html else 0}")
-        
-#         if not title or html is None or version is None:
-#             return JsonResponse({"error": "title, html, and version are required"}, status=400)
-
-#         # Validate version is a valid string
-#         if not version.strip():
-#             return JsonResponse({"error": "version is required"}, status=400)
-
-#         # Use the new approval workflow instead of direct save
-#         result = create_or_update_policy_for_approval(
-#             title=title, 
-#             html_template=html,
-#             version=version.strip()
-#         )
-#         print(f"Save result: {result}")
-#         return JsonResponse({"status": "success", **result})
-#     except json.JSONDecodeError:
-#         return JsonResponse({"error": "Invalid JSON data"}, status=400)
-#     except Exception as e:
-#         print(f"Error in policy_save: {str(e)}")
-#         import traceback
-#         traceback.print_exc()
-#         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
-
-# def policy_version_html(request, policy_id: int, version_number: int):
-#     if request.method != "GET":
-#         return JsonResponse({"error": "GET method required"}, status=405)
-
-#     try:
-#         html = reconstruct_policy_html_at_version(policy_id=policy_id, version_number=version_number)
-#         return JsonResponse({"policy_id": policy_id, "version_number": version_number, "html": html})
-#     except ObjectDoesNotExist as e:
-#         return JsonResponse({"error": str(e)}, status=404)
-#     except Exception as e:
-#         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
-
-# @csrf_exempt
-# def list_policies(request):
-#     if request.method != "GET":
-#         return JsonResponse({"error": "GET method required"}, status=405)
-
-#     policies = list(Policy.objects.values("id", "title", "version"))
-#     return JsonResponse({"policies": policies})
-
-# def get_policy_latest(request, policy_id: int):
-#     if request.method != "GET":
-#         return JsonResponse({"error": "GET method required"}, status=405)
-
-#     try:
-#         policy = Policy.objects.get(id=policy_id)
-        
-#         # Get all versions and convert version_number to float for proper numerical sorting
-#         versions = list(policy.versions.all())
-#         if not versions:
-#             return JsonResponse({"error": "No versions found"}, status=404)
-        
-#         # Sort versions by converting version_number to float for numerical comparison
-#         versions_sorted = sorted(versions, key=lambda x: float(x.version_number), reverse=True)
-#         latest_version = versions_sorted[0]
-        
-#         html = reconstruct_policy_html_at_version(policy_id, latest_version.version_number)
-#         return JsonResponse(
-#             {
-#                 "html": html,
-#                 "version": policy.version,
-#                 "version_number": latest_version.version_number,
-#             }
-#         )
-#     except ObjectDoesNotExist:
-#         return JsonResponse({"error": "Policy not found"}, status=404)
-#     except ValueError:
-#         return JsonResponse({"error": "Invalid version number format"}, status=400)
-#     except Exception as e:
-#         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
-
-# def get_policy_versions(request, policy_id: int):
-#     if request.method != "GET":
-#         return JsonResponse({"error": "GET method required"}, status=405)
-
-#     try:
-#         policy = Policy.objects.get(id=policy_id)
-#         versions = list(policy.versions.all())
-        
-#         # Sort versions numerically by converting to float
-#         versions_sorted = sorted(versions, key=lambda x: float(x.version_number), reverse=True)
-        
-#         versions_data = []
-#         for version in versions_sorted:
-#             versions_data.append({
-#                 "version_number": version.version_number,
-#                 "created_at": version.created_at
-#             })
-            
-#         return JsonResponse({
-#             "versions": versions_data,
-#             "policy_version": policy.version
-#         })
-#     except ObjectDoesNotExist:
-#         return JsonResponse({"error": "Policy not found"}, status=404)
-#     except ValueError:
-#         return JsonResponse({"error": "Invalid version number format"}, status=400)
-#     except Exception as e:
-#         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
-
-# @csrf_exempt
-# def approve_policy(request, policy_id: int):
-#     if request.method != "GET":
-#         return JsonResponse({"error": "GET method required"}, status=405)
-
-#     try:
-#         # Call the service to approve the policy and create version
-#         result = approve_policy_and_create_version(policy_id)
-        
-#         return JsonResponse({
-#             "status": "success",
-#             "message": "Policy approved successfully",
-#             "policy_id": policy_id,
-#             "version_number": result["version_number"]
-#         })
-
-#     except ObjectDoesNotExist as e:
-#         return JsonResponse({"error": str(e)}, status=404)
-#     except Exception as e:
-#         return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
 import json
 import uuid
+import traceback
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import transaction
+from django.db import transaction, connection
+
 from .models import PolicyTemplate, Organization, OrgPolicy, PolicyVersion
 from .services.policy_service import format_html_with_ai, reconstruct_policy_html_at_version
-from .utils.diff_utils import compute_html_diff,apply_diff 
+from .utils.diff_utils import compute_html_diff, apply_diff
+
+
+class PolicyService:
+    """Service class for policy-related operations"""
+    
+    @staticmethod
+    def validate_uuid(uuid_string, field_name):
+        """Validate UUID format"""
+        try:
+            return uuid.UUID(uuid_string)
+        except ValueError:
+            raise ValueError(f"Invalid {field_name} format")
+    
+    @staticmethod
+    def get_org_policy_by_id(org_policy_id):
+        """Get OrgPolicy by ID with raw SQL"""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, title FROM org_policies WHERE id = %s",
+                [org_policy_id]
+            )
+            return cursor.fetchone()
+    
+    @staticmethod
+    def count_policy_versions(org_policy_id):
+        """Count existing versions for a policy"""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*) FROM policy_versions WHERE org_policy_id = %s",
+                [org_policy_id]
+            )
+            return cursor.fetchone()[0]
+    
+    @staticmethod
+    def get_first_policy_version(org_policy_id):
+        """Get the first version of a policy"""
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT 
+                    id, 
+                    version, 
+                    diff_data::text as diff_data_str,
+                    created_at 
+                FROM policy_versions 
+                WHERE org_policy_id = %s 
+                ORDER BY created_at ASC 
+                LIMIT 1
+            """, [org_policy_id])
+            return cursor.fetchone()
+    
+    @staticmethod
+    def create_policy_version_record(version_data):
+        """Create a new PolicyVersion record"""
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO policy_versions 
+                (id, org_policy_id, version, diff_data, checkpoint_template, status, created_by, updated_by, created_at, updated_at)
+                VALUES 
+                (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, NOW(), NOW())
+                RETURNING id
+            """, version_data)
+            result = cursor.fetchone()
+            return result[0] if result else version_data[0]
+
+
+class PolicyResponseBuilder:
+    """Builder class for standardized API responses"""
+    
+    @staticmethod
+    def success(message, data=None, status=200):
+        """Build success response"""
+        response = {"message": message, "status": "success"}
+        if data:
+            response.update(data)
+        return JsonResponse(response, status=status)
+    
+    @staticmethod
+    def error(message, status=400, details=None):
+        """Build error response"""
+        response = {"error": message, "status": "error"}
+        if details:
+            response["details"] = details
+        return JsonResponse(response, status=status)
+
 
 @csrf_exempt
+@require_http_methods(["POST"])
 def initialise_policy(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
-
+    """
+    Initialize a new policy from a template with AI-generated content
+    """
     try:
+        # Parse and validate request data
         data = json.loads(request.body)
-        org_id = data.get("organization_id")
-        if not org_id:
-            return JsonResponse({"error": "organization_id is required"}, status=400)
-
-        policy_template_id = data.get("policy_template_id")
-        if not policy_template_id:
-            return JsonResponse({"error": "policy_template_id is required"}, status=400)
         
-        department = data.get("department")
-        category = data.get("category")
+        required_fields = ['organization_id', 'policy_template_id']
+        for field in required_fields:
+            if not data.get(field):
+                return PolicyResponseBuilder.error(f"{field} is required", status=400)
+        
+        org_id = data['organization_id']
+        policy_template_id = data['policy_template_id']
+        department = data.get('department')
+        category = data.get('category')
+        version = data.get('version', '0.1')
+        created_by = data.get('created_by', 'system')
 
-        # Validate policy template
+        # Validate and fetch policy template
         try:
-            policy_obj = PolicyTemplate.objects.get(id=uuid.UUID(policy_template_id))
+            policy_template = PolicyTemplate.objects.get(
+                id=PolicyService.validate_uuid(policy_template_id, 'policy_template_id')
+            )
         except PolicyTemplate.DoesNotExist:
-            return JsonResponse({"error": "Policy template not found"}, status=404)
+            return PolicyResponseBuilder.error("Policy template not found", status=404)
 
-        template = policy_obj.template
-        title = policy_obj.title
-        version = data.get("version", "0.1")  # Default version for initialization
-        created_by = data.get("created_by", "system")
+        # Validate and fetch organization
+        try:
+            organization = Organization.objects.get(
+                id=PolicyService.validate_uuid(org_id, 'organization_id')
+            )
+        except Organization.DoesNotExist:
+            return PolicyResponseBuilder.error("Organization not found", status=404)
 
-        # === STEP 1: Generate AI formatted HTML ===
-        formatting_result, llm_template = format_html_with_ai(template, title, department, category)
+        # Generate AI-formatted HTML
+        formatting_result, llm_template = format_html_with_ai(
+            policy_template.template, 
+            policy_template.title, 
+            department, 
+            category
+        )
 
         # Validate AI response
-        if not formatting_result or formatting_result.get("status") != 200:
-            msg = formatting_result.get("message") if formatting_result else "Unknown LLM error"
-            print(f"[ERROR] LLM generation failed: {msg}")
-            return JsonResponse(
-                {"error": f"AI policy generation failed: {msg}"},
-                status=502
-            )
+        if not formatting_result or formatting_result.get('status') != 200:
+            error_msg = formatting_result.get('message', 'Unknown LLM error') if formatting_result else 'LLM service unavailable'
+            print(f"[ERROR] LLM generation failed: {error_msg}")
+            return PolicyResponseBuilder.error(f"AI policy generation failed: {error_msg}", status=502)
 
-        # if not llm_template or "<html" not in llm_template.lower():
-        #     print("[ERROR] LLM returned invalid HTML content.")
-        #     return JsonResponse(
-        #         {"error": "AI returned invalid or empty policy HTML. Nothing was saved."},
-        #         status=502
-        #     )
-
-        # === STEP 2: Fetch organization ===
-        try:
-            org = Organization.objects.get(id=uuid.UUID(org_id))
-        except Organization.DoesNotExist:
-            return JsonResponse({"error": "Organization not found"}, status=404)
-
-        # === STEP 3: Create or update OrgPolicy ONLY (no PolicyVersion) ===
+        # Create or update OrgPolicy
         with transaction.atomic():
             org_policy, created = OrgPolicy.objects.select_for_update().get_or_create(
-                title=title,
-                organization=org,
+                title=policy_template.title,
+                organization=organization,
                 defaults={
                     'template': llm_template,
                     'policy_type': 'existingpolicy',
@@ -412,248 +161,344 @@ def initialise_policy(request):
             )
 
             if not created:
-                # Update existing policy
                 org_policy.template = llm_template
                 org_policy.updated_by = created_by
                 org_policy.save()
 
-        # === STEP 4: Return success with org_policy_id ===
-        return JsonResponse({
-            "message": "Policy initialized successfully",
-            "org_policy_id": str(org_policy.id),
-            "created": created,
-        }, status=201 if created else 200)
+        return PolicyResponseBuilder.success(
+            "Policy initialized successfully",
+            {
+                "org_policy_id": str(org_policy.id),
+                "created": created,
+                "title": policy_template.title,
+                "version": version
+            },
+            status=201 if created else 200
+        )
 
     except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON payload"}, status=400)
+        return PolicyResponseBuilder.error("Invalid JSON payload", status=400)
+    except ValueError as e:
+        return PolicyResponseBuilder.error(str(e), status=400)
     except Exception as e:
         print(f"[EXCEPTION] Internal error: {str(e)}")
-        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
+        traceback.print_exc()
+        return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
+
 
 @csrf_exempt
+@require_http_methods(["POST"])
 def create_the_initialised_policy(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
-
+    """
+    Create the first version of an initialized policy
+    """
     try:
         data = json.loads(request.body)
-        org_policy_id = data.get("org_policy_id")
-        if not org_policy_id:
-            return JsonResponse({"error": "org_policy_id is required"}, status=400)
         
-        html_content = data.get("html_content", None)  # Optional parameter
+        if not data.get('org_policy_id'):
+            return PolicyResponseBuilder.error("org_policy_id is required", status=400)
+        
+        org_policy_id = data['org_policy_id']
+        html_content = data.get('html_content')
+        created_by = data.get('created_by', 'system')
+        version = "1.0"
 
-        created_by = data.get("created_by", "system")
-        version = "1.0"  # Fixed version as requested
-
-        # === STEP 1: Fetch the initialized OrgPolicy ===
+        # Validate UUID and fetch OrgPolicy
         try:
-            org_policy = OrgPolicy.objects.get(id=uuid.UUID(org_policy_id))
+            PolicyService.validate_uuid(org_policy_id, 'org_policy_id')
+            org_policy = OrgPolicy.objects.get(id=org_policy_id)
+        except ValueError:
+            return PolicyResponseBuilder.error("Invalid org_policy_id format", status=400)
         except OrgPolicy.DoesNotExist:
-            return JsonResponse({"error": "OrgPolicy not found"}, status=404)
+            return PolicyResponseBuilder.error("OrgPolicy not found", status=404)
 
-        # === STEP 2: Determine checkpoint content ===
-        if html_content is None:
-            # Save OrgPolicy template in checkpoint
-            checkpoint_content = org_policy.template or ""
-            print("Using OrgPolicy template for checkpoint")
-        else:
-            # Save the provided html_content in checkpoint
-            checkpoint_content = html_content
-            print("Using provided html_content for checkpoint")
-
-        # === STEP 3: Calculate diff for version creation (empty → current content) ===
-        old_html = ""  # Start from empty, same as your current system
-        new_html = org_policy.template or ""
+        # Determine checkpoint content
+        checkpoint_content = html_content if html_content is not None else org_policy.template or ""
+        checkpoint_source = "provided_html" if html_content is not None else "org_policy_template"
         
         print(f"Creating version {version} for policy: {org_policy.title}")
-        print(f"Old HTML length: {len(old_html)}")
-        print(f"New HTML length: {len(new_html)}")
-        print(f"Checkpoint content length: {len(checkpoint_content)}")
-        
+        print(f"Checkpoint source: {checkpoint_source}, length: {len(checkpoint_content)}")
+
+        # Calculate diff from empty to current content
+        old_html = ""
+        new_html = org_policy.template or ""
         diff_json = compute_html_diff(old_html, new_html)
+        
         print(f"Diff computed. Changes: {len(diff_json.get('changes', []))}")
 
-        # === STEP 4: Create PolicyVersion record with checkpoint ===
-        with transaction.atomic():
-            policy_version = PolicyVersion.objects.create(
-                org_policy=org_policy,
-                version=version,
-                diff_data=diff_json,
-                checkpoint_template=checkpoint_content,  # Save determined checkpoint content
-                status='draft',
-                created_by=created_by,
-                updated_by=created_by,
-            )
-
-        # === STEP 5: Return success ===
-        return JsonResponse({
-            "message": "Initialized policy version created successfully",
-            "org_policy_id": str(org_policy.id),
-            "policy_version_id": str(policy_version.id),
-            "version_number": version,
-            "checkpoint_source": "provided_html" if html_content is not None else "org_policy_template"
-        }, status=201)
-
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON payload"}, status=400)
-    except Exception as e:
-        print(f"[EXCEPTION] Internal error: {str(e)}")
-        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
-    
-
-@csrf_exempt
-def update_policy(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
-
-    try:
-        data = json.loads(request.body)
-        org_policy_id = data.get("org_policy_id")
-        new_html = data.get("html")
-        version = data.get("version")
-        created_by = data.get("created_by", "system")
-
-        # Validate required fields
-        if not org_policy_id:
-            return JsonResponse({"error": "org_policy_id is required"}, status=400)
-        if not new_html:
-            return JsonResponse({"error": "html content is required"}, status=400)
-        if not version:
-            return JsonResponse({"error": "version is required"}, status=400)
-
-        # === STEP 1: Fetch the existing OrgPolicy ===
-        try:
-            org_policy = OrgPolicy.objects.get(id=uuid.UUID(org_policy_id))
-        except OrgPolicy.DoesNotExist:
-            return JsonResponse({"error": "OrgPolicy not found"}, status=404)
-
-        # === STEP 2: Count existing versions to determine position ===
-        existing_versions_count = PolicyVersion.objects.filter(
-            org_policy=org_policy
-        ).count()
-        
-        # This new version will be the (existing_versions_count + 1)th version
-        new_version_position = existing_versions_count + 1
-        
-        print(f"Existing versions: {existing_versions_count}, New version position: {new_version_position}")
-
-        # === STEP 3: Get the first PolicyVersion to reconstruct initial HTML ===
-        try:
-            # Get all versions sorted by version number to find the first one
-            first_version = PolicyVersion.objects.filter(
-                org_policy=org_policy
-            ).order_by('version').first()
-            
-            if not first_version:
-                return JsonResponse({"error": "No PolicyVersion found for this OrgPolicy"}, status=404)
-            
-            # Reconstruct initial HTML from first version's diff
-            # First version diff is from empty string to initial HTML
-            old_html = apply_diff("", first_version.diff_data)
-            print(f"Reconstructed initial HTML from first version {first_version.version}")
-            
-        except Exception as e:
-            print(f"Error reconstructing initial HTML: {str(e)}")
-            return JsonResponse({"error": "Failed to reconstruct initial HTML from versions"}, status=500)
-
-        # === STEP 4: Calculate diff between initial HTML and new HTML ===
-        diff_json = compute_html_diff(old_html, new_html)
-        print(f"Update diff computed. Changes: {len(diff_json.get('changes', []))}")
-
-        # === STEP 5: Determine checkpoint content based on VERSION POSITION ===
-        # Checkpoint at 11th, 21st, 31st, etc. (every 10x + 1 position)
-        is_checkpoint_version = (new_version_position % 10 == 1) and (new_version_position >= 11)
-        
-        print(f"Version position: {new_version_position}, Is checkpoint: {is_checkpoint_version}")
-
-        if is_checkpoint_version:
-            # Save the complete new HTML in checkpoint
-            checkpoint_content = new_html
-            print(f"✅ CHECKPOINT SAVED for version {version} (position {new_version_position}) - Complete HTML saved in checkpoint")
-        else:
-            # For regular versions, checkpoint remains empty
-            checkpoint_content = ""
-            print(f"Regular version {version} (position {new_version_position}) - No checkpoint saved")
-
-        # === STEP 6: Create new PolicyVersion with diff and checkpoint ===
+        # Create PolicyVersion record
         with transaction.atomic():
             policy_version = PolicyVersion.objects.create(
                 org_policy=org_policy,
                 version=version,
                 diff_data=diff_json,
                 checkpoint_template=checkpoint_content,
-                status='published',
+                status='draft',
                 created_by=created_by,
                 updated_by=created_by,
             )
 
-        # === STEP 7: Return success ===
-        return JsonResponse({
-            "message": "Policy updated successfully",
-            "org_policy_id": str(org_policy.id),
-            "policy_version_id": str(policy_version.id),
+        return PolicyResponseBuilder.success(
+            "Initialized policy version created successfully",
+            {
+                "org_policy_id": str(org_policy.id),
+                "policy_version_id": str(policy_version.id),
+                "version_number": version,
+                "checkpoint_source": checkpoint_source,
+                "changes_count": len(diff_json.get('changes', []))
+            },
+            status=201
+        )
+
+    except json.JSONDecodeError:
+        return PolicyResponseBuilder.error("Invalid JSON payload", status=400)
+    except Exception as e:
+        print(f"[EXCEPTION] Internal error: {str(e)}")
+        traceback.print_exc()
+        return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def update_policy(request):
+    """
+    Update an existing policy with a new version
+    """
+    try:
+        # Handle request body decoding
+        body_content = request.body
+        if isinstance(body_content, bytes):
+            body_content = body_content.decode('utf-8')
+        
+        data = json.loads(body_content)
+        
+        # Validate required fields
+        required_fields = ['org_policy_id', 'html', 'version']
+        for field in required_fields:
+            if not data.get(field):
+                return PolicyResponseBuilder.error(f"{field} is required", status=400)
+        
+        org_policy_id = data['org_policy_id']
+        new_html = data['html']
+        version = data['version']
+        created_by = data.get('created_by', 'system')
+
+        # Validate UUID format
+        try:
+            PolicyService.validate_uuid(org_policy_id, 'org_policy_id')
+        except ValueError:
+            return PolicyResponseBuilder.error("Invalid org_policy_id format", status=400)
+
+        # Verify OrgPolicy exists
+        org_policy_row = PolicyService.get_org_policy_by_id(org_policy_id)
+        if not org_policy_row:
+            return PolicyResponseBuilder.error("OrgPolicy not found", status=404)
+        
+        org_policy_id_db, org_policy_title = org_policy_row
+        print(f"Updating OrgPolicy: {org_policy_title}")
+
+        # Count existing versions and determine position
+        existing_versions_count = PolicyService.count_policy_versions(org_policy_id)
+        new_version_position = existing_versions_count + 1
+        print(f"Existing versions: {existing_versions_count}, New position: {new_version_position}")
+
+        # Get first version and reconstruct initial HTML
+        first_version_row = PolicyService.get_first_policy_version(org_policy_id)
+        old_html = ""
+
+        if first_version_row:
+            first_version_id, first_version_number, diff_data_str, created_at = first_version_row
+            
+            print("=== FIRST VERSION DATA ===")
+            print(f"Version: {first_version_number}, Diff length: {len(diff_data_str) if diff_data_str else 0}")
+            
+            # Parse and apply diff data to reconstruct HTML
+            if diff_data_str and diff_data_str.strip():
+                try:
+                    diff_dict = json.loads(diff_data_str)
+                    old_html = apply_diff("", diff_dict)
+                    print(f"Reconstructed HTML length: {len(old_html)}")
+                except (json.JSONDecodeError, Exception) as e:
+                    print(f"Error processing diff data: {e}")
+                    # Continue with empty HTML as fallback
+
+        # Calculate diff between initial and new HTML
+        diff_json = compute_html_diff(old_html, new_html)
+        print(f"Update diff computed. Changes: {len(diff_json.get('changes', []))}")
+
+        # Determine checkpoint strategy
+        is_checkpoint_version = (new_version_position % 10 == 1) and (new_version_position >= 11)
+        checkpoint_content = new_html if is_checkpoint_version else ""
+        print(f"Version position: {new_version_position}, Is checkpoint: {is_checkpoint_version}")
+
+        # Create new PolicyVersion
+        try:
+            with transaction.atomic():
+                new_policy_version_id = str(uuid.uuid4())
+                diff_json_str = json.dumps(diff_json)
+                
+                inserted_id = PolicyService.create_policy_version_record([
+                    new_policy_version_id,
+                    org_policy_id,
+                    version,
+                    diff_json_str,
+                    checkpoint_content,
+                    'published',
+                    created_by,
+                    created_by
+                ])
+                
+                print(f"✅ New PolicyVersion created: {inserted_id}")
+
+        except Exception as e:
+            print(f"Error creating PolicyVersion: {str(e)}")
+            traceback.print_exc()
+            return PolicyResponseBuilder.error(f"Failed to create policy version: {str(e)}", status=500)
+
+        # Build success response
+        response_data = {
+            "org_policy_id": org_policy_id,
+            "policy_version_id": inserted_id,
             "version_number": version,
             "version_position": new_version_position,
             "is_checkpoint": is_checkpoint_version,
             "checkpoint_saved": bool(checkpoint_content),
-            "initial_version_used": first_version.version,
-            "checkpoint_positions": "11th, 21st, 31st, etc. (every 10x + 1)"
-        }, status=201)
+            "reconstructed_html_length": len(old_html),
+            "new_html_length": len(new_html),
+            "changes_count": len(diff_json.get('changes', []))
+        }
+        
+        if first_version_row:
+            response_data["initial_version_used"] = first_version_number
+        
+        return PolicyResponseBuilder.success("Policy updated successfully", response_data, status=201)
 
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON payload"}, status=400)
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error: {e}")
+        return PolicyResponseBuilder.error("Invalid JSON payload", status=400)
     except Exception as e:
         print(f"[EXCEPTION] Internal error: {str(e)}")
-        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
-    
-@csrf_exempt
-def get_policy_version_html(request, org_policy_id: int):
-    """
-    Get specific version HTML for a policy.
-    Payload: {"version": "1.0"} or {"version": "11.5"} etc.
-    """
-    if request.method != "POST":
-        return JsonResponse({"error": "POST method required"}, status=405)
+        traceback.print_exc()
+        return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
 
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def get_policy_version_html(request):
+    """
+    Get specific version HTML for a policy
+    """
     try:
-        data = json.loads(request.body)
+        body_content = request.body
+        if isinstance(body_content, bytes):
+            body_content = body_content.decode('utf-8')
+        
+        data = json.loads(body_content)
         target_version = data.get("version")
+        org_policy_id = data.get("org_policy_id")
         
         if not target_version:
-            return JsonResponse({"error": "version is required in payload"}, status=400)
+            return PolicyResponseBuilder.error("version is required in payload", status=400)
+        if not org_policy_id:
+            return PolicyResponseBuilder.error("org_policy_id is required in payload", status=400)
+
+        # Validate UUID format
+        try:
+            PolicyService.validate_uuid(org_policy_id, 'org_policy_id')
+        except ValueError:
+            return PolicyResponseBuilder.error("Invalid org_policy_id format", status=400)
 
         # Validate OrgPolicy exists
-        try:
-            org_policy = OrgPolicy.objects.get(id=org_policy_id)
-        except OrgPolicy.DoesNotExist:
-            return JsonResponse({"error": "OrgPolicy not found"}, status=404)
-
-        # Reconstruct the HTML for the target version
-        html_content = reconstruct_policy_html_at_version(org_policy_id, target_version)
+        org_policy_row = PolicyService.get_org_policy_by_id(org_policy_id)
+        if not org_policy_row:
+            return PolicyResponseBuilder.error("OrgPolicy not found", status=404)
         
-        # Get version info
-        version_obj = PolicyVersion.objects.get(
-            org_policy_id=org_policy_id, 
-            version=target_version
+        org_policy_id_db, org_policy_title = org_policy_row
+
+        # Get all versions in order
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT version, diff_data::text, checkpoint_template
+                FROM policy_versions 
+                WHERE org_policy_id = %s 
+                ORDER BY created_at ASC
+            """, [org_policy_id])
+            all_versions = cursor.fetchall()
+        
+        if not all_versions:
+            return PolicyResponseBuilder.error("No versions found for this policy", status=404)
+
+        # Sequential reconstruction
+        current_html = ""
+        target_found = False
+        
+        for version_data in all_versions:
+            version_num, diff_data_str, checkpoint_content = version_data
+            
+            # Apply diff for this version
+            if diff_data_str and diff_data_str.strip():
+                try:
+                    diff_dict = json.loads(diff_data_str)
+                    current_html = apply_diff(current_html, diff_dict)
+                except Exception as e:
+                    print(f"Error applying diff for version {version_num}: {e}")
+            
+            # Stop when we reach target version
+            if version_num == target_version:
+                target_found = True
+                break
+        
+        if not target_found:
+            return PolicyResponseBuilder.error(f"Version {target_version} not found for this policy", status=404)
+
+        # Get version info for response
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT status, created_by, created_at
+                FROM policy_versions 
+                WHERE org_policy_id = %s AND version = %s
+            """, [org_policy_id, target_version])
+            version_info = cursor.fetchone()
+        
+        status, created_by, created_at = version_info if version_info else ('unknown', 'unknown', None)
+        
+        return PolicyResponseBuilder.success(
+            "Policy version HTML retrieved successfully",
+            {
+                "org_policy_id": org_policy_id,
+                "policy_title": org_policy_title,
+                "version": target_version,
+                "html": current_html,
+                "created_at": created_at.isoformat() if created_at else None,
+                "status": status,
+                "created_by": created_by,
+                "reconstruction_method": "sequential",
+                "html_length": len(current_html)
+            }
         )
-        
-        return JsonResponse({
-            "org_policy_id": org_policy_id,
-            "policy_title": org_policy.title,
-            "version": target_version,
-            "html": html_content,
-            "created_at": version_obj.created_at.isoformat() if version_obj.created_at else None,
-            "status": version_obj.status,
-            "created_by": version_obj.created_by,
-            "has_checkpoint": bool(version_obj.checkpoint),
-            "reconstruction_method": "checkpoint" if version_obj.checkpoint else "sequential"
-        })
 
-    except PolicyVersion.DoesNotExist:
-        return JsonResponse({"error": f"Version {target_version} not found for this policy"}, status=404)
-    except ObjectDoesNotExist as e:
-        return JsonResponse({"error": str(e)}, status=404)
+    except json.JSONDecodeError:
+        return PolicyResponseBuilder.error("Invalid JSON payload", status=400)
     except Exception as e:
         print(f"[EXCEPTION] Internal error: {str(e)}")
-        return JsonResponse({"error": f"Internal server error: {str(e)}"}, status=500)
+        traceback.print_exc()
+        return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
+
+
+# =============================================================================
+# UNUSED VIEW FUNCTIONS (COMMENTED OUT FOR NOW)
+# =============================================================================
+
+"""
+@csrf_exempt
+@require_http_methods(["POST"])
+def legacy_policy_creation(request):
+    # Legacy policy creation endpoint - not currently used
+    pass
+
+@csrf_exempt  
+@require_http_methods(["GET"])
+def policy_approval_workflow(request):
+    # Policy approval workflow - not currently implemented
+    pass
+"""
