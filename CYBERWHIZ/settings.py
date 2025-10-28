@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure-8g6_e*&c=zk5zfb*px2=52mp-1^q_jz$-^mydspj7sr!y*c!)_
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
@@ -79,15 +79,17 @@ WSGI_APPLICATION = 'CYBERWHIZ.wsgi.application'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": config("POSTGRES_DB"),
-        "USER": config("POSTGRES_USER"),
-        "PASSWORD": config("POSTGRES_PASSWORD"),
-        "HOST": config("POSTGRES_HOST"),
-        "PORT": config("POSTGRES_PORT", cast=int),
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'stackflo_dev',
+        'USER': 'stackflo',
+        'PASSWORD': 'stackflo@321',
+        'HOST': '192.168.6.4',
+        'PORT': '5432',
     }
 }
+
+
 
 
 # Password validation

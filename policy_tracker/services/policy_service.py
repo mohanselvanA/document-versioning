@@ -1,203 +1,360 @@
 import requests
+import json
 from decouple import config
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from ..models import Organization, Policy, OrganizationPolicy, PolicyVersion
+from ..models import Organization, OrgPolicy, PolicyVersion
 from ..utils.diff_utils import compute_html_diff, apply_diff
 
 AI_CHAT_URL = config("AI_CHAT_URL")
 
-def format_html_with_ai(raw_html: str) -> str:
-    """
-    Send raw HTML to AI service for proper formatting and styling
-    """
-    prompt = f"""
-    Please convert this raw policy HTML into a properly structured, visually appealing HTML document.
+
+class PolicyAIService:
+    """Service class for AI-related policy operations"""
     
-    Requirements:
-    1. Maintain all the original content and meaning
-    2. Add proper HTML structure with semantic tags
-    3. Include CSS styling for better readability
-    4. Format tables, lists, and sections properly
-    5. Make it responsive and professional-looking
-    6. Keep the same policy content but improve presentation
+    @staticmethod
+    def extract_title_version_from_pdf(pdf_text):
+        """
+        Extract policy title and version from PDF text content using AI
+        """
+        prompt = f"""
+        Analyze the following PDF text content and extract the policy title and version number.
+        
+        PDF CONTENT:
+        {pdf_text[:4000]}  # Limit content to avoid token limits
+        
+        INSTRUCTIONS:
+        1. Identify the main policy title - look for the most prominent heading or document title
+        2. Identify the version number - look for patterns like "Version X.X", "v1.0", "Rev 2.3", etc.
+        3. If you find both title and version, return them in JSON format
+        4. If title is missing, indicate which field is missing
+        5. If version is missing, indicate which field is missing
+        6. If both are missing, indicate both are missing
+        
+        RETURN FORMAT (JSON):
+        {{
+            "title": "Extracted Policy Title or null if not found",
+            "version": "Extracted Version Number or null if not found"
+        }}
+        
+        Return ONLY the JSON object without any additional text or explanations.
+        """
+        
+        payload = {"query": prompt}
+        try:
+            response = requests.post(AI_CHAT_URL, json=payload, timeout=30)
+            response.raise_for_status()
+            response_text = response.json().get("response", "").strip()
+            
+            # Clean the response to extract JSON
+            response_text = response_text.replace('```json', '').replace('```', '').strip()
+            
+            extracted_data = json.loads(response_text)
+            
+            missing_fields = []
+            if not extracted_data.get("title"):
+                missing_fields.append("title")
+            if not extracted_data.get("version"):
+                missing_fields.append("version")
+            
+            if missing_fields:
+                return {
+                    "status": 400,
+                    "message": f"Missing required fields from PDF: {', '.join(missing_fields)}",
+                    "missing_fields": missing_fields,
+                    "extracted_data": extracted_data
+                }, None
+            else:
+                return {
+                    "status": 200,
+                    "message": "Title and version successfully extracted from PDF",
+                    "extracted_data": extracted_data
+                }, extracted_data
+                
+        except requests.Timeout:
+            return {
+                "status": 408,
+                "message": "AI service timeout",
+                "missing_fields": ["title", "version"],
+                "extracted_data": {"title": None, "version": None}
+            }, None
+        except Exception as e:
+            print(f"PDF title/version extraction failed: {str(e)}")
+            return {
+                "status": 400,
+                "message": f"Failed to extract title and version from PDF: {str(e)}",
+                "missing_fields": ["title", "version"],
+                "extracted_data": {"title": None, "version": None}
+            }, None
+
+    @staticmethod
+    def format_html_with_ai(template, title, department, category):
+        """
+        Send policy information to AI service to generate complete policy HTML.
+        """
+        version = "Initial Draft V0"
+        date = "October 27, 2025"
+        company_name = "Your Company"
+        company_logo = "logo"
+        expiry_date = "October 27, 2026"
+        
+        if template:
+            prompt = f"""
+            Create a comprehensive, professional policy document in HTML format with modern, visually appealing styling.
+
+            POLICY TITLE: {title}
+            DEPARTMENT: {department}
+            CATEGORY: {category}
+            VERSION: {version}
+            COMPANY NAME: {company_name}
+            COMPANY LOGO URL: {company_logo}
+            DATE: {date}
+            EXPIRY DATE: {expiry_date}
+
+            Include the following metadata if present:
+            {template}
+
+            Generate a complete policy document that includes:
+
+            CONTENT STRUCTURE:
+            1. A header section with company logo, name, policy title, and metadata
+            2. Comprehensive policy sections tailored to {department} and {category}
+            3. Proper heading hierarchy (h1, h2, h3)
+            4. A footer with company name and date
+
+            STYLING REQUIREMENTS:
+            - Modern, professional appearance with clean color palette
+            - Responsive design that works on all devices
+            - Clean typography with proper spacing
+
+            Return ONLY the complete, self-contained HTML document without any explanations.
+            Include CSS within <style> tags in the head section.
+            """
+        
+        payload = {"query": prompt}
+
+        try:
+            response = requests.post(AI_CHAT_URL, json=payload, timeout=100)
+            response.raise_for_status()
+            response_text = response.json().get("response", "").strip()
+
+            # Clean response
+            if response_text.startswith('"') and response_text.endswith('"'):
+                response_text = response_text[1:-1]
+            if response_text.startswith('```html'):
+                response_text = response_text[7:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+
+            # Optionally slice starting from <h1> for consistency
+            start_index = response_text.find("<h1>")
+            if start_index >= 0:
+                response_text = response_text[start_index:]
+
+            return {"status": 200, "message": "Policy generated successfully by LLM"}, response_text
+
+        except requests.Timeout:
+            return {"status": 408, "message": "AI service timeout"}, ""
+        except Exception as e:
+            print(f"AI policy generation failed: {str(e)}")
+            return {"status": 500, "message": f"AI policy generation failed: {str(e)}"}, ""
+
+
+class PolicyVersionService:
+    """Service class for policy version operations"""
     
-    Raw HTML Content:
-    {raw_html}
-    
-    Return ONLY the formatted HTML without any explanations.
-    """
-    
-    payload = {"query": prompt}
-    try:
-        res = requests.post(AI_CHAT_URL, json=payload)
-        res.raise_for_status()
-        return {
-            "Status": "success",
-            "message": "AI formatting service succeeded",
-            "error": None,
-            "status": 200
-        }, res.json().get("response", "").strip()
-    except Exception as e:
-        print(f"AI formatting failed: {str(e)}")
-        return {
-            "Status": "error",
-            "message": "AI formatting service failed, using raw HTML",
-            "error": str(e),
-            "status": 206
-        }, raw_html
-
-
-def analyze_policy_content(content, policy_titles):
-    """Send content to AI service for policy analysis"""
-    prompt = f"""
-    You are a compliance assistant. Compare the new policy content with the list of existing policy titles.
-
-    New Policy Content:
-    {content}
-
-    Existing Policy Titles:
-    {', '.join(policy_titles)}
-
-    Instructions:
-    1. Analyze if the new policy content matches or is very similar to any of the existing policy titles
-    2. If there's a clear match, return ONLY the matching policy title from the list
-    3. If no clear match is found, return "No matching policy found"
-    4. Do not add any explanations, summaries, or additional text
-    5. Return only the exact policy title from the list or "No matching policy found"
-    """
-
-    payload = {"query": prompt}
-    res = requests.post(AI_CHAT_URL, json=payload)
-    res.raise_for_status()
-    
-    return res.json().get("response", "").strip()
-
-def link_policy_to_organization(org_id, policy_title):
-    """Link policy to organization if match found"""
-    try:
-        org = Organization.objects.get(id=org_id)
-        policy = Policy.objects.get(title=policy_title)
-
-        OrganizationPolicy.objects.get_or_create(
+    @staticmethod
+    @transaction.atomic
+    def create_or_update_policy_with_version(title, html_template, version, org, created_by, updated_by, description=None):
+        """
+        Create a new OrgPolicy or update an existing one, recording a PolicyVersion diff.
+        """
+        formatted_html = html_template
+        
+        org_policy, created = OrgPolicy.objects.select_for_update().get_or_create(
+            title=title,
             organization=org,
-            policy=policy
+            defaults={
+                'template': formatted_html,
+                'policy_type': 'existingpolicy',
+                'created_by': created_by,
+                'updated_by': updated_by,
+            },
         )
-        return True
-    except ObjectDoesNotExist as e:
-        raise e
-    except Exception as e:
-        raise e
 
-def get_all_policy_titles():
-    """Get all policy titles from database"""
-    return [policy.title for policy in Policy.objects.all()]
+        if created:
+            print(f"Creating new OrgPolicy: {title} with version: {version} for organization: {org.id}")
+            # New policy - create first version with empty diff
+            old_html = ""
+            new_html = formatted_html
+            
+            diff_json = compute_html_diff(old_html, new_html)
+            
+            policy_version = PolicyVersion.objects.create(
+                org_policy=org_policy,
+                version=version,
+                diff_data=diff_json,
+                status='published',
+                created_by=created_by,
+                updated_by=updated_by,
+            )
+            print(f"New OrgPolicy created successfully. OrgPolicy ID: {org_policy.id}, PolicyVersion ID: {policy_version.id}")
+            return {
+                "org_policy_id": org_policy.id,
+                "policy_version_id": policy_version.id,
+                "version_number": version,
+                "created": True,
+            }
 
-
-@transaction.atomic
-def create_or_update_policy_with_version(title: str, html_template: str, version: str, description: str | None = None) -> dict:
-    """
-    Create a new policy or update an existing one, recording a PolicyVersion diff.
-    """
-    # Remove AI formatting for now to debug the issue
-    # formatted_html = format_html_with_ai(html_template)
-    formatted_html = html_template  # Use the HTML directly without AI formatting
-    
-    policy, created = Policy.objects.select_for_update().get_or_create(
-        title=title,
-        defaults={
-            'policy_template': formatted_html,
-            'version': version,
-        },
-    )
-
-    if created:
-        print(f"Creating new policy: {title} with version: {version}")
-        # New policy - create first version with empty diff
-        old_html = ""
+        print(f"Updating existing OrgPolicy: {title} to version {version} for organization: {org.id}")
+        print(f"Old HTML length: {len(org_policy.template or '')}")
+        print(f"New HTML length: {len(formatted_html)}")
+        
+        # Existing policy: compute diff vs current template
+        old_html = org_policy.template or ""
         new_html = formatted_html
         
         diff_json = compute_html_diff(old_html, new_html)
-        
-        PolicyVersion.objects.create(
-            policy=policy,
-            version_number=version,
-            diffDetails=diff_json,
+        print(f"Diff computed. Changes: {len(diff_json.get('changes', []))}")
+
+        # Update OrgPolicy template
+        org_policy.template = new_html
+        org_policy.updated_by = updated_by
+        org_policy.save()
+
+        # Create new PolicyVersion with diff
+        policy_version = PolicyVersion.objects.create(
+            org_policy=org_policy,
+            version=version,
+            diff_data=diff_json,
+            status='published',
+            created_by=created_by,
+            updated_by=updated_by,
         )
-        print(f"New policy created successfully. Policy ID: {policy.id}")
+        
+        print(f"OrgPolicy updated successfully. New version: {version}, PolicyVersion ID: {policy_version.id}")
         return {
-            "policy_id": policy.id, 
-            "version_number": version, 
-            "created": True,
-            "version": policy.version
+            "org_policy_id": org_policy.id,
+            "policy_version_id": policy_version.id,
+            "version_number": version,
+            "created": False,
         }
 
-    print(f"Updating existing policy: {title} from version {policy.version} to {version}")
-    print(f"Old HTML length: {len(policy.policy_template or '')}")
-    print(f"New HTML length: {len(formatted_html)}")
-    
-    # Existing policy: compute diff vs current template
-    old_html = policy.policy_template or ""
-    new_html = formatted_html
-    
-    diff_json = compute_html_diff(old_html, new_html)
-    print(f"Diff computed. Changes: {len(diff_json.get('changes', []))}")
-
-    # Update policy current template and version
-    policy.policy_template = new_html
-    policy.version = version
-    policy.save()
-
-    # Create new PolicyVersion with diff only
-    PolicyVersion.objects.create(
-        policy=policy,
-        version_number=version,
-        diffDetails=diff_json,
-    )
-    
-    print(f"Policy updated successfully. New version: {version}")
-    return {
-        "policy_id": policy.id, 
-        "version_number": version, 
-        "created": False,
-        "version": policy.version
-    }
-
-def reconstruct_policy_html_at_version(policy_id: int, version_number: str) -> str:
-    """
-    Reconstruct policy HTML for a specific version by applying diffs sequentially.
-    Starts from empty and applies all diffs up to the target version.
-    """
-    try:
-        # Get all versions up to and including the target version
-        all_versions = list(PolicyVersion.objects.filter(
-            policy_id=policy_id
-        ).all())
-        
-        # Sort versions numerically
+    @staticmethod
+    def reconstruct_policy_html_at_version(org_policy_id, target_version):
+        """
+        Reconstruct policy HTML for a specific version using optimal checkpoint strategy.
+        """
         try:
-            versions_sorted = sorted(all_versions, key=lambda x: float(x.version_number))
-        except ValueError:
-            versions_sorted = sorted(all_versions, key=lambda x: x.version_number)
+            # Get all versions for this policy
+            all_versions = list(PolicyVersion.objects.filter(
+                org_policy_id=org_policy_id
+            ).order_by('version'))
+            
+            if not all_versions:
+                raise ObjectDoesNotExist("No versions found for this policy")
+            
+            # Find target version
+            target_version_obj = None
+            for version in all_versions:
+                if version.version == target_version:
+                    target_version_obj = version
+                    break
+            
+            if not target_version_obj:
+                raise ObjectDoesNotExist(f"Version {target_version} not found")
+            
+            # Find the nearest checkpoint BEFORE the target version
+            nearest_checkpoint = None
+            for version in reversed(all_versions):
+                if version.version <= target_version and version.checkpoint_template:
+                    nearest_checkpoint = version
+                    break
+            
+            if nearest_checkpoint:
+                print(f"Using checkpoint at version {nearest_checkpoint.version} to reconstruct version {target_version}")
+                return PolicyVersionService._reconstruct_from_checkpoint(nearest_checkpoint, target_version_obj, all_versions)
+            else:
+                # No checkpoint found, reconstruct from beginning
+                print(f"No checkpoint found, reconstructing version {target_version} from beginning")
+                return PolicyVersionService._reconstruct_sequentially(all_versions, target_version)
+            
+        except Exception as e:
+            print(f"Error reconstructing policy HTML: {str(e)}")
+            raise e
+
+    @staticmethod
+    def _reconstruct_from_checkpoint(checkpoint_version, target_version, all_versions):
+        """Reconstruct HTML from checkpoint to target version"""
+        current_html = checkpoint_version.checkpoint_template or ""
+        start_applying = False
         
-        # Find target version index
-        target_index = None
-        for i, v in enumerate(versions_sorted):
-            if v.version_number == str(version_number):
-                target_index = i
+        for version in all_versions:
+            if version.version == checkpoint_version.version:
+                start_applying = True
+                continue
+                
+            if start_applying and version.diff_data:
+                current_html = apply_diff(current_html, version.diff_data)
+                
+            if version.version == target_version.version:
                 break
-        
-        if target_index is None:
-            raise ObjectDoesNotExist("Requested version does not exist")
-        
-        # Start from empty HTML and apply all diffs up to target version
+                
+        return current_html
+
+    @staticmethod
+    def _reconstruct_sequentially(all_versions, target_version):
+        """Reconstruct HTML sequentially from beginning to target version"""
         current_html = ""
         
-        for i in range(target_index + 1):  # Apply all diffs including target version
-            if versions_sorted[i].diffDetails:
-                current_html = apply_diff(current_html, versions_sorted[i].diffDetails)
-        
+        for version in all_versions:
+            if version.diff_data:
+                current_html = apply_diff(current_html, version.diff_data)
+                
+            if version.version == target_version:
+                break
+                
         return current_html
-        
-    except PolicyVersion.DoesNotExist:
-        raise ObjectDoesNotExist(f"Policy version {version_number} not found for policy {policy_id}")
+
+
+# Legacy function aliases for backward compatibility
+def extract_title_version_from_pdf(pdf_text):
+    """Legacy function - use PolicyAIService.extract_title_version_from_pdf instead"""
+    return PolicyAIService.extract_title_version_from_pdf(pdf_text)
+
+def format_html_with_ai(template, title, department, category):
+    """Legacy function - use PolicyAIService.format_html_with_ai instead"""
+    return PolicyAIService.format_html_with_ai(template, title, department, category)
+
+def create_or_update_policy_with_version(title, html_template, version, org, created_by, updated_by, description=None):
+    """Legacy function - use PolicyVersionService.create_or_update_policy_with_version instead"""
+    return PolicyVersionService.create_or_update_policy_with_version(
+        title, html_template, version, org, created_by, updated_by, description
+    )
+
+def reconstruct_policy_html_at_version(org_policy_id, target_version):
+    """Legacy function - use PolicyVersionService.reconstruct_policy_html_at_version instead"""
+    return PolicyVersionService.reconstruct_policy_html_at_version(org_policy_id, target_version)
+
+
+# =============================================================================
+# UNUSED FUNCTIONS (COMMENTED OUT FOR NOW)
+# =============================================================================
+
+"""
+def analyze_policy_content(content, policy_titles):
+    # Send content to AI service for policy analysis
+    # This function is not currently used in the main workflow
+    pass
+
+def link_policy_to_organization(org_id, policy_title):
+    # Link policy to organization if match found
+    # This function is not currently used in the main workflow
+    pass
+
+def get_all_policy_titles():
+    # Get all policy titles from database
+    # This function is not currently used in the main workflow
+    pass
+"""
