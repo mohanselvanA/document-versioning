@@ -2,9 +2,6 @@ import uuid
 from django.db import models
 
 
-# -------------------------------------------------------
-# ORGANIZATIONS TABLE
-# -------------------------------------------------------
 class Organization(models.Model):
     STATUS_CHOICES = [
         ('active', 'Active'),
@@ -28,9 +25,6 @@ class Organization(models.Model):
         return self.name or str(self.id)
 
 
-# -------------------------------------------------------
-# POLICY_TEMPLATES TABLE
-# -------------------------------------------------------
 class PolicyTemplate(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     short_name = models.CharField(max_length=255, unique=False, null=True, blank=True)
@@ -52,9 +46,6 @@ class PolicyTemplate(models.Model):
         return self.title or str(self.id)
 
 
-# -------------------------------------------------------
-# ORG_POLICIES TABLE
-# -------------------------------------------------------
 class OrgPolicy(models.Model):
     POLICY_TYPE_CHOICES = [
         ('orgpolicy', 'Org Policy'),
@@ -78,9 +69,6 @@ class OrgPolicy(models.Model):
         return self.title
 
 
-# -------------------------------------------------------
-# POLICY_VERSIONS TABLE
-# -------------------------------------------------------
 class PolicyVersion(models.Model):
     STATUS_CHOICES = [
         ('draft', 'Draft'),
@@ -109,9 +97,6 @@ class PolicyVersion(models.Model):
         return f"{self.org_policy.title} - {self.version}"
 
 
-# -------------------------------------------------------
-# USERS TABLE
-# -------------------------------------------------------
 class User(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, null=True, blank=True)
@@ -131,9 +116,6 @@ class User(models.Model):
         return self.email
 
 
-# -------------------------------------------------------
-# ROLES TABLE (Referenced by user_role_organizations)
-# -------------------------------------------------------
 class Role(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
@@ -145,9 +127,6 @@ class Role(models.Model):
         return self.name
 
 
-# -------------------------------------------------------
-# USER_ROLE_ORGANIZATIONS TABLE
-# -------------------------------------------------------
 class UserRoleOrganization(models.Model):
     STATUS_CHOICES = [
         ('active', 'Active'),
