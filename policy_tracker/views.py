@@ -480,8 +480,8 @@ def create_the_initialised_policy(request):
                 org_policy=org_policy,
                 version=version,
                 diff_data=diff_json,
-                checkpoint=checkpoint_content,  # Save determined checkpoint content
-                status='published',
+                checkpoint_template=checkpoint_content,  # Save determined checkpoint content
+                status='draft',
                 created_by=created_by,
                 updated_by=created_by,
             )
@@ -582,7 +582,7 @@ def update_policy(request):
                 org_policy=org_policy,
                 version=version,
                 diff_data=diff_json,
-                checkpoint=checkpoint_content,
+                checkpoint_template=checkpoint_content,
                 status='published',
                 created_by=created_by,
                 updated_by=created_by,

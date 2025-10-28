@@ -94,7 +94,7 @@ class PolicyVersion(models.Model):
     diff_data = models.JSONField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     created_by = models.CharField(max_length=255, null=True, blank=True)
-    checkpoint = models.TextField(null=True, blank=True, default="")
+    checkpoint_template = models.TextField(null=True, blank=True)
     reviewed_at = models.DateField(null=True, blank=True)
     reviewed_by = models.CharField(max_length=255, null=True, blank=True)
     expired_at = models.DateField(null=True, blank=True)
