@@ -114,8 +114,9 @@ def initialise_policy(request):
         policy_template_id = data['policy_template_id']
         department = data.get('department')
         category = data.get('category')
-        version = data.get('version', '0.1')
-        created_by = data.get('created_by', 'system')
+        version = data.get('version', '1')
+        workforce_assignment = data.get('workforce_assignment', {})
+        approver = data.get('approver')
 
         # Validate and fetch policy template
         try:
@@ -133,6 +134,10 @@ def initialise_policy(request):
         except Organization.DoesNotExist:
             return PolicyResponseBuilder.error("Organization not found", status=404)
 
+        # CRITICAL: Validate title is not None or empty (NOT NULL constraint in DB)
+        if not policy_template.title or policy_template.title.strip() == '':
+            return PolicyResponseBuilder.error("Policy template title is required but missing or empty", status=400)
+
         # Generate AI-formatted HTML
         formatting_result, llm_template = format_html_with_ai(
             policy_template.template, 
@@ -147,7 +152,7 @@ def initialise_policy(request):
             print(f"[ERROR] LLM generation failed: {error_msg}")
             return PolicyResponseBuilder.error(f"AI policy generation failed: {error_msg}", status=502)
 
-        # Create or update OrgPolicy
+        # FIXED: Remove created_by and updated_by fields since they don't exist in DB
         with transaction.atomic():
             org_policy, created = OrgPolicy.objects.select_for_update().get_or_create(
                 title=policy_template.title,
@@ -155,14 +160,15 @@ def initialise_policy(request):
                 defaults={
                     'template': llm_template,
                     'policy_type': 'existingpolicy',
-                    'created_by': created_by,
-                    'updated_by': created_by,
+                    'department': department,
+                    'category': category,
                 },
             )
 
             if not created:
                 org_policy.template = llm_template
-                org_policy.updated_by = created_by
+                org_policy.department = department
+                org_policy.category = category
                 org_policy.save()
 
         return PolicyResponseBuilder.success(
@@ -184,7 +190,6 @@ def initialise_policy(request):
         print(f"[EXCEPTION] Internal error: {str(e)}")
         traceback.print_exc()
         return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
-
 
 @csrf_exempt
 @require_http_methods(["POST"])

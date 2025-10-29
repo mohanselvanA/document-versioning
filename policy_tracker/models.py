@@ -54,19 +54,28 @@ class OrgPolicy(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey('Organization', on_delete=models.CASCADE, null=True, blank=True)
-    title = models.CharField(max_length=255)
+    title = models.CharField(max_length=255)  # This is NOT NULL in DB
     policy_type = models.CharField(max_length=20, choices=POLICY_TYPE_CHOICES, null=True, blank=True)
     template = models.TextField(null=True, blank=True)
     created_by = models.CharField(max_length=255, null=True, blank=True)
     department = models.CharField(max_length=255, null=True, blank=True)
     category = models.CharField(max_length=255, null=True, blank=True)
     workforce_assignments = models.JSONField(null=True, blank=True)
-    updated_by = models.CharField(max_length=255, null=True, blank=True)
+    # updated_by = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'org_policies'
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if not self.title or self.title.strip() == '':
+            raise ValidationError("Title is required and cannot be empty")
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.title
