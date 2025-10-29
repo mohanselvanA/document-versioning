@@ -99,36 +99,67 @@ class PolicyAIService:
         expiry_date = "October 27, 2026"
         
         if template:
-            prompt = f"""
-            Create a comprehensive, professional policy document in HTML format with modern, visually appealing styling.
+            prompt = f"""You are a senior UI/UX designer and full-stack developer specializing in corporate policy documents.
 
-            POLICY TITLE: {title}
-            DEPARTMENT: {department}
-            CATEGORY: {category}
-            VERSION: {version}
-            COMPANY NAME: {company_name}
-            COMPANY LOGO URL: {company_logo}
-            DATE: {date}
-            EXPIRY DATE: {expiry_date}
+Generate a **complete, standalone, visually stunning HTML policy document** with **modern, colorful, professional styling**. 
 
-            Include the following metadata if present:
-            {template}
+**INPUT DATA:**
+- Title: {title}
+- Department: {department}
+- Category: {category}
+- Version: {version}
+- Company Name: {company_name}
+- Company Logo URL: {company_logo}
+- Effective Date: {date}
+- Expiry Date: {expiry_date}
+- Policy Content (raw text): {template}
 
-            Generate a complete policy document that includes:
+**MANDATORY REQUIREMENTS:**
 
-            CONTENT STRUCTURE:
-            1. A header section with company logo, name, policy title, and metadata
-            2. Comprehensive policy sections tailored to {department} and {category}
-            3. Proper heading hierarchy (h1, h2, h3)
-            4. A footer with company name and date
+1. **Return ONLY the HTML** — **NO explanations, NO markdown, NO code blocks, NO backticks**.
+2. **Full HTML5 document** with `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`.
+3. **All CSS must be inline in `<style>` tag** in `<head>`.
+4. **Responsive design** — perfect on mobile, tablet, desktop.
+5. **Print-optimized** — clean when printed.
 
-            STYLING REQUIREMENTS:
-            - Modern, professional appearance with clean color palette
-            - Responsive design that works on all devices
-            - Clean typography with proper spacing
+**VISUAL DESIGN (Must Include):**
+- Vibrant, professional color scheme (use brand-like blues, teals, purples, accents)
+- Company logo in header (responsive, centered on mobile)
+- Hero header with gradient background
+- Policy metadata in a **beautiful info card**
+- **Rich typography**: Google Fonts (Roboto, Inter, or similar), proper hierarchy
+- **Section dividers** with subtle gradients or icons
+- **Tables** with zebra striping, hover effects, rounded corners
+- **Charts** (if applicable): 
+   - Pie chart for "Compliance Distribution"
+   - Bar chart for "Review Timeline"
+   - Use **inline SVG + CSS animations**
+- **Icons** (SVG) for: department, category, calendar, version, warning
+- **Callout boxes**: Info, Warning, Success
+- **Footer** with company name, dates, page number (for print)
 
-            Return ONLY the complete, self-contained HTML document without any explanations.
-            Include CSS within <style> tags in the head section.
+**CONTENT STRUCTURE (Must Follow):**
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto:wght@700&display=swap" rel="stylesheet">
+  <style> /* ALL CSS HERE */ </style>
+</head>
+<body>
+  <!-- 1. HERO HEADER -->
+  <!-- 2. POLICY METADATA CARD -->
+  <!-- 3. TABLE OF CONTENTS (if >3 sections) -->
+  <!-- 4. MAIN CONTENT (parsed from {template}, styled beautifully) -->
+  <!-- 5. COMPLIANCE PIE CHART -->
+  <!-- 6. REVIEW TIMELINE BAR CHART -->
+  <!-- 7. CALLOUTS -->
+  <!-- 8. FOOTER -->
+</body>
+</html>
             """
         
         payload = {"query": prompt}

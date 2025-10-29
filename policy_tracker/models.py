@@ -58,6 +58,9 @@ class OrgPolicy(models.Model):
     policy_type = models.CharField(max_length=20, choices=POLICY_TYPE_CHOICES, null=True, blank=True)
     template = models.TextField(null=True, blank=True)
     created_by = models.CharField(max_length=255, null=True, blank=True)
+    department = models.CharField(max_length=255, null=True, blank=True)
+    category = models.CharField(max_length=255, null=True, blank=True)
+    workforce_assignments = models.JSONField(null=True, blank=True)
     updated_by = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -70,31 +73,40 @@ class OrgPolicy(models.Model):
 
 
 class PolicyVersion(models.Model):
-    STATUS_CHOICES = [
-        ('draft', 'Draft'),
-        ('published', 'Published'),
-        ('archived', 'Archived'),
-    ]
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    org_policy = models.ForeignKey('OrgPolicy', on_delete=models.CASCADE)
-    version = models.CharField(max_length=50, null=True, blank=True)
-    diff_data = models.JSONField(null=True, blank=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    created_by = models.CharField(max_length=255, null=True, blank=True)
-    checkpoint_template = models.TextField(null=True, blank=True)
-    reviewed_at = models.DateField(null=True, blank=True)
-    reviewed_by = models.CharField(max_length=255, null=True, blank=True)
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
+    org_policy_id = models.UUIDField()  # Raw UUID column (matches Laravel)
+    version = models.CharField(max_length=255, null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('draft', 'Draft'),
+            ('in_review', 'In Review'),
+            ('published', 'Published'),
+            ('archived', 'Archived'),
+        ],
+        default='draft'
+    )
+    is_current = models.BooleanField(default=False)
     expired_at = models.DateField(null=True, blank=True)
-    updated_by = models.CharField(max_length=255, null=True, blank=True)
+    approved_by = models.CharField(max_length=255, null=True, blank=True)
+    published_at = models.DateTimeField(null=True, blank=True)
+    diff_data = models.JSONField(null=True, blank=True)
+    checkpoint_template = models.TextField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'policy_versions'
+        # We'll add constraint in migration
+        constraints = []  # Remove invalid ForeignKeyConstraint
 
     def __str__(self):
-        return f"{self.org_policy.title} - {self.version}"
+        return f"PolicyVersion {self.version or 'N/A'} ({self.status})"
 
 
 class User(models.Model):
