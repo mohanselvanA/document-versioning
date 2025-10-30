@@ -57,10 +57,10 @@ class OrgPolicy(models.Model):
     title = models.CharField(max_length=255)  # This is NOT NULL in DB
     policy_type = models.CharField(max_length=20, choices=POLICY_TYPE_CHOICES, null=True, blank=True)
     template = models.TextField(null=True, blank=True)
-    created_by = models.CharField(max_length=255, null=True, blank=True)
+    # created_by = models.CharField(max_length=255, null=True, blank=True)
     department = models.CharField(max_length=255, null=True, blank=True)
     category = models.CharField(max_length=255, null=True, blank=True)
-    workforce_assignments = models.JSONField(null=True, blank=True)
+    workforce_assignments = models.TextField()
     # updated_by = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -170,3 +170,78 @@ class UserRoleOrganization(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.organization.name}"
+    
+class Employee(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
+    organization_id = models.UUIDField()
+    sync_user_id = models.UUIDField()
+    department = models.CharField(max_length=255, blank=True, null=True)
+    designation = models.CharField(max_length=255, blank=True, null=True)
+    name = models.CharField(max_length=255, blank=True, null=True)
+    email = models.CharField(max_length=255, blank=True, null=True)
+    password = models.CharField(max_length=255, blank=True, null=True)
+    image = models.CharField(max_length=255, blank=True, null=True)
+    provider = models.CharField(max_length=255, blank=True, null=True)
+    provider_id = models.CharField(max_length=255, blank=True, null=True)
+    status = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        default='invited',
+        help_text="invited::character varying"
+    )
+    mode = models.BooleanField(default=False)
+    remember_token = models.CharField(max_length=100, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employees'
+        verbose_name = 'Employee'
+        verbose_name_plural = 'Employees'
+
+    def __str__(self):
+        return self.name or self.email or str(self.id)
+    
+class PolicyApprover(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
+    policy_version_id = models.UUIDField()
+    approver_id = models.UUIDField()
+    condition = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        default=None
+    )
+    status = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        default='pending',
+        help_text="pending::character varying"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'policy_approvers'
+        verbose_name = 'Policy Approver'
+        verbose_name_plural = 'Policy Approvers'
+        # Enforce uniqueness at DB level (recommended)
+        constraints = [
+            models.UniqueConstraint(
+                fields=['policy_version_id', 'approver_id'],
+                name='unique_policy_approver'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.policy_version_id} → {self.approver_id} ({self.status})"

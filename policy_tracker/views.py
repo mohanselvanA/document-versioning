@@ -7,13 +7,28 @@ from django.views.decorators.http import require_http_methods
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, connection
 
-from .models import PolicyTemplate, Organization, OrgPolicy, PolicyVersion
+from .models import PolicyTemplate, Organization, OrgPolicy, PolicyVersion, Employee, PolicyApprover
 from .services.policy_service import format_html_with_ai, reconstruct_policy_html_at_version
 from .utils.diff_utils import compute_html_diff, apply_diff
 
 
 class PolicyService:
     """Service class for policy-related operations"""
+
+
+    @staticmethod
+    def get_latest_version_number(org_policy_id):
+        """Fetch the latest version number string for a given OrgPolicy ID."""
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT version
+                FROM policy_versions
+                WHERE org_policy_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, [org_policy_id])
+            row = cursor.fetchone()
+            return row[0] if row else None
     
     @staticmethod
     def validate_uuid(uuid_string, field_name):
@@ -66,9 +81,9 @@ class PolicyService:
         with connection.cursor() as cursor:
             cursor.execute("""
                 INSERT INTO policy_versions 
-                (id, org_policy_id, version, diff_data, checkpoint_template, status, created_by, updated_by, created_at, updated_at)
+                (id, org_policy_id, version, diff_data, checkpoint_template, status, created_at, updated_at)
                 VALUES 
-                (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, NOW(), NOW())
+                (%s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW())
                 RETURNING id
             """, version_data)
             result = cursor.fetchone()
@@ -115,8 +130,14 @@ def initialise_policy(request):
         department = data.get('department')
         category = data.get('category')
         version = data.get('version', '1')
-        workforce_assignment = data.get('workforce_assignment', {})
-        approver = data.get('approver')
+        workforce_assignment = data.get('workforce_assignment')
+        # approver = data.get('approver', "")
+
+        # if approver!=None or approver!="":
+        #     approver = uuid.UUID(approver)
+        #     checkingApproverExists = Employee.objects.filter(id=approver).exists()
+        #     if not checkingApproverExists:
+        #         return PolicyResponseBuilder.error("Approver not found", status=404)
 
         # Validate and fetch policy template
         try:
@@ -138,6 +159,7 @@ def initialise_policy(request):
         if not policy_template.title or policy_template.title.strip() == '':
             return PolicyResponseBuilder.error("Policy template title is required but missing or empty", status=400)
 
+        # llm_template = "This is a sample policy"
         # Generate AI-formatted HTML
         formatting_result, llm_template = format_html_with_ai(
             policy_template.template, 
@@ -146,7 +168,7 @@ def initialise_policy(request):
             category
         )
 
-        # Validate AI response
+        # # # Validate AI response
         if not formatting_result or formatting_result.get('status') != 200:
             error_msg = formatting_result.get('message', 'Unknown LLM error') if formatting_result else 'LLM service unavailable'
             print(f"[ERROR] LLM generation failed: {error_msg}")
@@ -154,6 +176,13 @@ def initialise_policy(request):
 
         # FIXED: Remove created_by and updated_by fields since they don't exist in DB
         with transaction.atomic():
+
+            if len(workforce_assignment) != 0:
+                workforce_assignments_list = json.dumps({"assignments": workforce_assignment})
+            else:
+                workforce_assignments_list = json.dumps({"assignments": []})
+                
+
             org_policy, created = OrgPolicy.objects.select_for_update().get_or_create(
                 title=policy_template.title,
                 organization=organization,
@@ -162,6 +191,7 @@ def initialise_policy(request):
                     'policy_type': 'existingpolicy',
                     'department': department,
                     'category': category,
+                    'workforce_assignments': workforce_assignments_list,
                 },
             )
 
@@ -171,13 +201,21 @@ def initialise_policy(request):
                 org_policy.category = category
                 org_policy.save()
 
+            # savingApprover = PolicyApprover.objects.create(
+            #     policy_version_id=org_policy.id,
+            #     approver_id=approver
+            # )
+
+            
+
         return PolicyResponseBuilder.success(
             "Policy initialized successfully",
             {
                 "org_policy_id": str(org_policy.id),
                 "created": created,
                 "title": policy_template.title,
-                "version": version
+                "version": version,
+                'workforce_assignments': workforce_assignment,
             },
             status=201 if created else 200
         )
@@ -207,11 +245,24 @@ def create_the_initialised_policy(request):
         html_content = data.get('html_content')
         created_by = data.get('created_by', 'system')
         version = "1.0"
+        approver = data.get('approver', "")
+        # workforce_assignment = data.get('workforce_assignment', [])
+
+        # if len(workforce_assignment) != 0:
+        #     workforce_assignment = json.dumps({"assignments": workforce_assignment})
+        # else:   
+        #     workforce_assignment = json.dumps({"assignments": []})
+
+        if approver!=None or approver!="":
+            approver = uuid.UUID(approver)
+            checkingApproverExists = Employee.objects.filter(id=approver).exists()
+            if not checkingApproverExists:
+                return PolicyResponseBuilder.error("Approver not found", status=404)
 
         # Validate UUID and fetch OrgPolicy
         try:
             PolicyService.validate_uuid(org_policy_id, 'org_policy_id')
-            org_policy = OrgPolicy.objects.get(id=org_policy_id)
+            org_policy = OrgPolicy.objects.get(id=uuid.UUID(org_policy_id))
         except ValueError:
             return PolicyResponseBuilder.error("Invalid org_policy_id format", status=400)
         except OrgPolicy.DoesNotExist:
@@ -234,13 +285,23 @@ def create_the_initialised_policy(request):
         # Create PolicyVersion record
         with transaction.atomic():
             policy_version = PolicyVersion.objects.create(
-                org_policy=org_policy,
+                org_policy_id=org_policy.id,
                 version=version,
                 diff_data=diff_json,
                 checkpoint_template=checkpoint_content,
                 status='draft',
-                created_by=created_by,
-                updated_by=created_by,
+                created_at=created_by,
+                updated_at=created_by,
+            )
+
+            created_policy_version_id = policy_version.id
+
+            # org_policy.workforce_assignments = workforce_assignment
+            # org_policy.save()
+
+            savingApprover = PolicyApprover.objects.create(
+                policy_version_id=created_policy_version_id,
+                approver_id=approver
             )
 
         return PolicyResponseBuilder.success(
@@ -250,7 +311,8 @@ def create_the_initialised_policy(request):
                 "policy_version_id": str(policy_version.id),
                 "version_number": version,
                 "checkpoint_source": checkpoint_source,
-                "changes_count": len(diff_json.get('changes', []))
+                "changes_count": len(diff_json.get('changes', [])),
+                "approver":approver
             },
             status=201
         )
@@ -261,13 +323,12 @@ def create_the_initialised_policy(request):
         print(f"[EXCEPTION] Internal error: {str(e)}")
         traceback.print_exc()
         return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
-
-
 @csrf_exempt
 @require_http_methods(["POST"])
 def update_policy(request):
     """
-    Update an existing policy with a new version
+    Update an existing policy with a new version.
+    If version not provided, automatically increment the last version.
     """
     try:
         # Handle request body decoding
@@ -278,16 +339,18 @@ def update_policy(request):
         data = json.loads(body_content)
         
         # Validate required fields
-        required_fields = ['org_policy_id', 'html', 'version']
+        required_fields = ['org_policy_id', 'organization_id', 'html_content', 'workforce_assignment', 'approver']
         for field in required_fields:
             if not data.get(field):
                 return PolicyResponseBuilder.error(f"{field} is required", status=400)
         
         org_policy_id = data['org_policy_id']
-        new_html = data['html']
-        version = data['version']
-        created_by = data.get('created_by', 'system')
-
+        organization_id = data['organization_id']
+        new_html = data['html_content']
+        workforce_assignment = data['workforce_assignment']
+        approver = data['approver']
+        version = data.get('version')  # optional field
+        
         # Validate UUID format
         try:
             PolicyService.validate_uuid(org_policy_id, 'org_policy_id')
@@ -302,41 +365,50 @@ def update_policy(request):
         org_policy_id_db, org_policy_title = org_policy_row
         print(f"Updating OrgPolicy: {org_policy_title}")
 
-        # Count existing versions and determine position
+        # Count existing versions
         existing_versions_count = PolicyService.count_policy_versions(org_policy_id)
         new_version_position = existing_versions_count + 1
-        print(f"Existing versions: {existing_versions_count}, New position: {new_version_position}")
+
+        # 🟢 AUTO-INCREMENT VERSION LOGIC
+        if not version:
+            last_version_str = PolicyService.get_latest_version_number(org_policy_id)
+            if last_version_str:
+                try:
+                    major, minor = map(int, last_version_str.split('.'))
+                    if minor < 9:
+                        minor += 1
+                    else:
+                        major += 1
+                        minor = 0
+                    version = f"{major}.{minor}"
+                except Exception as e:
+                    print(f"Error parsing version '{last_version_str}': {e}")
+                    version = "1.0"  # fallback
+            else:
+                version = "1.0"  # default for first entry
+        
+        print(f"Computed version: {version}")
 
         # Get first version and reconstruct initial HTML
         first_version_row = PolicyService.get_first_policy_version(org_policy_id)
         old_html = ""
-
         if first_version_row:
             first_version_id, first_version_number, diff_data_str, created_at = first_version_row
-            
-            print("=== FIRST VERSION DATA ===")
-            print(f"Version: {first_version_number}, Diff length: {len(diff_data_str) if diff_data_str else 0}")
-            
-            # Parse and apply diff data to reconstruct HTML
             if diff_data_str and diff_data_str.strip():
                 try:
                     diff_dict = json.loads(diff_data_str)
                     old_html = apply_diff("", diff_dict)
-                    print(f"Reconstructed HTML length: {len(old_html)}")
-                except (json.JSONDecodeError, Exception) as e:
-                    print(f"Error processing diff data: {e}")
-                    # Continue with empty HTML as fallback
+                except Exception as e:
+                    print(f"Error reconstructing HTML: {e}")
 
-        # Calculate diff between initial and new HTML
+        # Compute diff between old and new HTML
         diff_json = compute_html_diff(old_html, new_html)
-        print(f"Update diff computed. Changes: {len(diff_json.get('changes', []))}")
 
-        # Determine checkpoint strategy
+        # Determine checkpoint
         is_checkpoint_version = (new_version_position % 10 == 1) and (new_version_position >= 11)
         checkpoint_content = new_html if is_checkpoint_version else ""
-        print(f"Version position: {new_version_position}, Is checkpoint: {is_checkpoint_version}")
 
-        # Create new PolicyVersion
+        # Insert new PolicyVersion
         try:
             with transaction.atomic():
                 new_policy_version_id = str(uuid.uuid4())
@@ -349,18 +421,27 @@ def update_policy(request):
                     diff_json_str,
                     checkpoint_content,
                     'published',
-                    created_by,
-                    created_by
                 ])
                 
                 print(f"✅ New PolicyVersion created: {inserted_id}")
 
+                org_policy = OrgPolicy.objects.get(id=uuid.UUID(org_policy_id))
+                org_policy.workforce_assignments = json.dumps({"assignments": workforce_assignment}, ensure_ascii=False)
+                org_policy.save()
+
+                checkApprover = Employee.objects.filter(id = uuid.UUID(approver), status = "active").exists()
+                if checkApprover:
+                    savingApprover = PolicyApprover.objects.create(
+                        policy_version_id=new_policy_version_id,
+                        approver_id=uuid.UUID(approver)
+                    )
+                else:
+                    raise Exception("Approver not found")
+
         except Exception as e:
-            print(f"Error creating PolicyVersion: {str(e)}")
             traceback.print_exc()
             return PolicyResponseBuilder.error(f"Failed to create policy version: {str(e)}", status=500)
 
-        # Build success response
         response_data = {
             "org_policy_id": org_policy_id,
             "policy_version_id": inserted_id,
@@ -368,42 +449,159 @@ def update_policy(request):
             "version_position": new_version_position,
             "is_checkpoint": is_checkpoint_version,
             "checkpoint_saved": bool(checkpoint_content),
-            "reconstructed_html_length": len(old_html),
-            "new_html_length": len(new_html),
             "changes_count": len(diff_json.get('changes', []))
         }
-        
-        if first_version_row:
-            response_data["initial_version_used"] = first_version_number
-        
         return PolicyResponseBuilder.success("Policy updated successfully", response_data, status=201)
 
-    except json.JSONDecodeError as e:
-        print(f"JSON decode error: {e}")
+    except json.JSONDecodeError:
         return PolicyResponseBuilder.error("Invalid JSON payload", status=400)
     except Exception as e:
-        print(f"[EXCEPTION] Internal error: {str(e)}")
         traceback.print_exc()
         return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
+
+# @csrf_exempt
+# @require_http_methods(["POST"])
+# def update_policy(request):
+#     """
+#     Update an existing policy with a new version
+#     """
+#     try:
+#         # Handle request body decoding
+#         body_content = request.body
+#         if isinstance(body_content, bytes):
+#             body_content = body_content.decode('utf-8')
+        
+#         data = json.loads(body_content)
+        
+#         # Validate required fields
+#         required_fields = ['org_policy_id', 'organization_id', 'html_content','workforce_assignment','approver']
+#         for field in required_fields:
+#             if not data.get(field):
+#                 return PolicyResponseBuilder.error(f"{field} is required", status=400)
+        
+#         org_policy_id = data['org_policy_id']
+#         organization_id = data['organization_id']
+#         new_html = data['html_content']
+#         workforce_assignment = data['workforce_assignment']
+#         approver = data['approver']
+
+#         # created_by = data.get('created_by', 'system')
+
+#         # Validate UUID format
+#         try:
+#             PolicyService.validate_uuid(org_policy_id, 'org_policy_id')
+#         except ValueError:
+#             return PolicyResponseBuilder.error("Invalid org_policy_id format", status=400)
+
+#         # Verify OrgPolicy exists
+#         org_policy_row = PolicyService.get_org_policy_by_id(org_policy_id)
+#         if not org_policy_row:
+#             return PolicyResponseBuilder.error("OrgPolicy not found", status=404)
+        
+#         org_policy_id_db, org_policy_title = org_policy_row
+#         print(f"Updating OrgPolicy: {org_policy_title}")
+
+#         # Count existing versions and determine position
+#         existing_versions_count = PolicyService.count_policy_versions(org_policy_id)
+#         new_version_position = existing_versions_count + 1
+#         print(f"Existing versions: {existing_versions_count}, New position: {new_version_position}")
+
+#         # Get first version and reconstruct initial HTML
+#         first_version_row = PolicyService.get_first_policy_version(org_policy_id)
+#         old_html = ""
+
+#         if first_version_row:
+#             first_version_id, first_version_number, diff_data_str, created_at = first_version_row
+            
+#             print("=== FIRST VERSION DATA ===")
+#             print(f"Version: {first_version_number}, Diff length: {len(diff_data_str) if diff_data_str else 0}")
+            
+#             # Parse and apply diff data to reconstruct HTML
+#             if diff_data_str and diff_data_str.strip():
+#                 try:
+#                     diff_dict = json.loads(diff_data_str)
+#                     old_html = apply_diff("", diff_dict)
+#                     print(f"Reconstructed HTML length: {len(old_html)}")
+#                 except (json.JSONDecodeError, Exception) as e:
+#                     print(f"Error processing diff data: {e}")
+#                     # Continue with empty HTML as fallback
+
+#         # Calculate diff between initial and new HTML
+#         diff_json = compute_html_diff(old_html, new_html)
+#         print(f"Update diff computed. Changes: {len(diff_json.get('changes', []))}")
+
+#         # Determine checkpoint strategy
+#         is_checkpoint_version = (new_version_position % 10 == 1) and (new_version_position >= 11)
+#         checkpoint_content = new_html if is_checkpoint_version else ""
+#         print(f"Version position: {new_version_position}, Is checkpoint: {is_checkpoint_version}")
+
+#         # Create new PolicyVersion
+#         try:
+#             with transaction.atomic():
+#                 new_policy_version_id = str(uuid.uuid4())
+#                 diff_json_str = json.dumps(diff_json)
+                
+#                 inserted_id = PolicyService.create_policy_version_record([
+#                     new_policy_version_id,
+#                     org_policy_id,
+#                     version,
+#                     diff_json_str,
+#                     checkpoint_content,
+#                     'published',
+#                     # created_by,
+#                     # created_by
+#                 ])
+                
+#                 print(f"✅ New PolicyVersion created: {inserted_id}")
+
+#         except Exception as e:
+#             print(f"Error creating PolicyVersion: {str(e)}")
+#             traceback.print_exc()
+#             return PolicyResponseBuilder.error(f"Failed to create policy version: {str(e)}", status=500)
+
+#         # Build success response
+#         response_data = {
+#             "org_policy_id": org_policy_id,
+#             "policy_version_id": inserted_id,
+#             "version_number": version,
+#             "version_position": new_version_position,
+#             "is_checkpoint": is_checkpoint_version,
+#             "checkpoint_saved": bool(checkpoint_content),
+#             "reconstructed_html_length": len(old_html),
+#             "new_html_length": len(new_html),
+#             "changes_count": len(diff_json.get('changes', []))
+#         }
+        
+#         if first_version_row:
+#             response_data["initial_version_used"] = first_version_number
+        
+#         return PolicyResponseBuilder.success("Policy updated successfully", response_data, status=201)
+
+#     except json.JSONDecodeError as e:
+#         print(f"JSON decode error: {e}")
+#         return PolicyResponseBuilder.error("Invalid JSON payload", status=400)
+#     except Exception as e:
+#         print(f"[EXCEPTION] Internal error: {str(e)}")
+#         traceback.print_exc()
+#         return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
 
 
 @csrf_exempt
 @require_http_methods(["POST"])
 def get_policy_version_html(request):
     """
-    Get specific version HTML for a policy
+    Get the latest (or specific) version HTML for a policy.
+    If version not provided, fetch the latest version from DB.
     """
     try:
         body_content = request.body
         if isinstance(body_content, bytes):
             body_content = body_content.decode('utf-8')
-        
+
         data = json.loads(body_content)
-        target_version = data.get("version")
         org_policy_id = data.get("org_policy_id")
-        
-        if not target_version:
-            return PolicyResponseBuilder.error("version is required in payload", status=400)
+        input_version = data.get("version")  # Optional – if user wants a specific version
+
         if not org_policy_id:
             return PolicyResponseBuilder.error("org_policy_id is required in payload", status=400)
 
@@ -417,56 +615,79 @@ def get_policy_version_html(request):
         org_policy_row = PolicyService.get_org_policy_by_id(org_policy_id)
         if not org_policy_row:
             return PolicyResponseBuilder.error("OrgPolicy not found", status=404)
-        
+
         org_policy_id_db, org_policy_title = org_policy_row
 
-        # Get all versions in order
+        # 🟩 Fetch latest version (if version not given)
+        with connection.cursor() as cursor:
+            if input_version:
+                target_version = input_version
+            else:
+                cursor.execute("""
+                    SELECT version
+                    FROM policy_versions
+                    WHERE org_policy_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, [org_policy_id])
+                row = cursor.fetchone()
+                target_version = row[0] if row else None
+
+        if not target_version:
+            return PolicyResponseBuilder.error("No versions found for this policy", status=404)
+
+        # 🟩 Get all versions sequentially to reconstruct HTML
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT version, diff_data::text, checkpoint_template
-                FROM policy_versions 
-                WHERE org_policy_id = %s 
+                FROM policy_versions
+                WHERE org_policy_id = %s
                 ORDER BY created_at ASC
             """, [org_policy_id])
             all_versions = cursor.fetchall()
-        
+
         if not all_versions:
             return PolicyResponseBuilder.error("No versions found for this policy", status=404)
 
-        # Sequential reconstruction
+        # 🟩 Sequential reconstruction from diffs
         current_html = ""
         target_found = False
-        
+
         for version_data in all_versions:
             version_num, diff_data_str, checkpoint_content = version_data
-            
-            # Apply diff for this version
+
+            # Apply diff if available
             if diff_data_str and diff_data_str.strip():
                 try:
                     diff_dict = json.loads(diff_data_str)
                     current_html = apply_diff(current_html, diff_dict)
                 except Exception as e:
                     print(f"Error applying diff for version {version_num}: {e}")
-            
-            # Stop when we reach target version
+
+            # Stop at the target version
             if version_num == target_version:
                 target_found = True
                 break
-        
+
         if not target_found:
             return PolicyResponseBuilder.error(f"Version {target_version} not found for this policy", status=404)
 
-        # Get version info for response
+        # 🟩 Get metadata for the target version
         with connection.cursor() as cursor:
             cursor.execute("""
-                SELECT status, created_by, created_at
-                FROM policy_versions 
+                SELECT status, created_at
+                FROM policy_versions
                 WHERE org_policy_id = %s AND version = %s
+                LIMIT 1
             """, [org_policy_id, target_version])
             version_info = cursor.fetchone()
-        
-        status, created_by, created_at = version_info if version_info else ('unknown', 'unknown', None)
-        
+
+        if version_info:
+            status, created_at = version_info
+        else:
+            status, created_at = "unknown", None
+
+        # 🟩 Success response
         return PolicyResponseBuilder.success(
             "Policy version HTML retrieved successfully",
             {
@@ -475,15 +696,15 @@ def get_policy_version_html(request):
                 "version": target_version,
                 "html": current_html,
                 "created_at": created_at.isoformat() if created_at else None,
-                "status": status,
-                "created_by": created_by,
+                "status": "draft",
                 "reconstruction_method": "sequential",
-                "html_length": len(current_html)
+                "html_length": len(current_html),
             }
         )
 
     except json.JSONDecodeError:
         return PolicyResponseBuilder.error("Invalid JSON payload", status=400)
+
     except Exception as e:
         print(f"[EXCEPTION] Internal error: {str(e)}")
         traceback.print_exc()
@@ -507,3 +728,19 @@ def policy_approval_workflow(request):
     # Policy approval workflow - not currently implemented
     pass
 """
+
+
+
+# @staticmethod
+# def get_latest_version_number(org_policy_id):
+#     """Fetch the latest version number string for a given OrgPolicy ID."""
+#     with connection.cursor() as cursor:
+#         cursor.execute("""
+#             SELECT version
+#             FROM policy_versions
+#             WHERE org_policy_id = %s
+#             ORDER BY created_at DESC
+#             LIMIT 1
+#         """, [org_policy_id])
+#         row = cursor.fetchone()
+#         return row[0] if row else None
