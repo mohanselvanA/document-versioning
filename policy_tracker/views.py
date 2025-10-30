@@ -600,7 +600,8 @@ def get_policy_version_html(request):
 
         data = json.loads(body_content)
         org_policy_id = data.get("org_policy_id")
-        input_version = data.get("version")  # Optional – if user wants a specific version
+        input_version = data.get("version", None)
+        organization_id = data.get("organization_id", None)
 
         if not org_policy_id:
             return PolicyResponseBuilder.error("org_policy_id is required in payload", status=400)
@@ -699,6 +700,7 @@ def get_policy_version_html(request):
                 "status": "draft",
                 "reconstruction_method": "sequential",
                 "html_length": len(current_html),
+                "organization_id":organization_id
             }
         )
 
