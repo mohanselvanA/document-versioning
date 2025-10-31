@@ -126,6 +126,12 @@ def initialise_policy(request):
                 return PolicyResponseBuilder.error(f"{field} is required", status=400)
         
         org_id = data['organization_id']
+        organization_name = None
+        organization_name_check = (Organization.objects.filter(id=uuid.UUID("2067eb5f-403b-437c-9fa7-db3fe47117d1"))).exists()
+        if organization_name_check == False:
+            return PolicyResponseBuilder.error("Organization not found", status=404)
+        else:
+            organization_name = (Organization.objects.get(id=uuid.UUID(org_id))).name
         policy_template_id = data['policy_template_id']
         department = data.get('department')
         category = data.get('category')
@@ -165,7 +171,8 @@ def initialise_policy(request):
             policy_template.template, 
             policy_template.title, 
             department, 
-            category
+            category,
+            organization_name
         )
 
         # # # Validate AI response
@@ -323,35 +330,36 @@ def create_the_initialised_policy(request):
         print(f"[EXCEPTION] Internal error: {str(e)}")
         traceback.print_exc()
         return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def update_policy(request):
     """
     Update an existing policy with a new version.
-    If version not provided, automatically increment the last version.
+    If version not provided, auto-increment as x.y.1
+    If version is provided, increment to (x+1).0
     """
     try:
-        # Handle request body decoding
+        # Decode body
         body_content = request.body
         if isinstance(body_content, bytes):
             body_content = body_content.decode('utf-8')
-        
         data = json.loads(body_content)
-        
+
         # Validate required fields
         required_fields = ['org_policy_id', 'organization_id', 'html_content', 'workforce_assignment', 'approver']
         for field in required_fields:
             if not data.get(field):
                 return PolicyResponseBuilder.error(f"{field} is required", status=400)
-        
+
         org_policy_id = data['org_policy_id']
         organization_id = data['organization_id']
         new_html = data['html_content']
         workforce_assignment = data['workforce_assignment']
         approver = data['approver']
-        version = data.get('version')  # optional field
-        
-        # Validate UUID format
+        version = data.get('version')
+
+        # Validate UUID
         try:
             PolicyService.validate_uuid(org_policy_id, 'org_policy_id')
         except ValueError:
@@ -361,7 +369,7 @@ def update_policy(request):
         org_policy_row = PolicyService.get_org_policy_by_id(org_policy_id)
         if not org_policy_row:
             return PolicyResponseBuilder.error("OrgPolicy not found", status=404)
-        
+
         org_policy_id_db, org_policy_title = org_policy_row
         print(f"Updating OrgPolicy: {org_policy_title}")
 
@@ -369,27 +377,40 @@ def update_policy(request):
         existing_versions_count = PolicyService.count_policy_versions(org_policy_id)
         new_version_position = existing_versions_count + 1
 
-        # 🟢 AUTO-INCREMENT VERSION LOGIC
+        # 🟢 VERSION LOGIC
+        last_version_str = PolicyService.get_latest_version_number(org_policy_id)
+
+        def parse_version(v):
+            parts = v.split('.')
+            while len(parts) < 3:
+                parts.append('0')
+            return list(map(int, parts[:3]))
+
         if not version:
-            last_version_str = PolicyService.get_latest_version_number(org_policy_id)
+            # No version provided → increment patch version
             if last_version_str:
                 try:
-                    major, minor = map(int, last_version_str.split('.'))
-                    if minor < 9:
-                        minor += 1
-                    else:
-                        major += 1
-                        minor = 0
-                    version = f"{major}.{minor}"
+                    major, minor, patch = parse_version(last_version_str)
+                    patch += 1
+                    version = f"{major}.{minor}.{patch}"
                 except Exception as e:
                     print(f"Error parsing version '{last_version_str}': {e}")
-                    version = "1.0"  # fallback
+                    version = "1.0.1"
             else:
-                version = "1.0"  # default for first entry
-        
+                version = "1.0.1"  # default for first entry
+        else:
+            # Version provided → increment major only
+            try:
+                major, *_ = parse_version(version)
+                major += 1
+                version = f"{major}.0"
+            except Exception as e:
+                print(f"Error parsing provided version '{version}': {e}")
+                version = "1.0"
+
         print(f"Computed version: {version}")
 
-        # Get first version and reconstruct initial HTML
+        # Get first version (for diff base)
         first_version_row = PolicyService.get_first_policy_version(org_policy_id)
         old_html = ""
         if first_version_row:
@@ -401,7 +422,7 @@ def update_policy(request):
                 except Exception as e:
                     print(f"Error reconstructing HTML: {e}")
 
-        # Compute diff between old and new HTML
+        # Compute diff
         diff_json = compute_html_diff(old_html, new_html)
 
         # Determine checkpoint
@@ -413,25 +434,24 @@ def update_policy(request):
             with transaction.atomic():
                 new_policy_version_id = str(uuid.uuid4())
                 diff_json_str = json.dumps(diff_json)
-                
+
                 inserted_id = PolicyService.create_policy_version_record([
                     new_policy_version_id,
                     org_policy_id,
                     version,
                     diff_json_str,
                     checkpoint_content,
-                    'published',
+                    'draft',
                 ])
-                
+
                 print(f"✅ New PolicyVersion created: {inserted_id}")
 
                 org_policy = OrgPolicy.objects.get(id=uuid.UUID(org_policy_id))
                 org_policy.workforce_assignments = json.dumps({"assignments": workforce_assignment}, ensure_ascii=False)
                 org_policy.save()
 
-                checkApprover = Employee.objects.filter(id = uuid.UUID(approver), status = "active").exists()
-                if checkApprover:
-                    savingApprover = PolicyApprover.objects.create(
+                if Employee.objects.filter(id=uuid.UUID(approver), status="active").exists():
+                    PolicyApprover.objects.create(
                         policy_version_id=new_policy_version_id,
                         approver_id=uuid.UUID(approver)
                     )
@@ -458,6 +478,7 @@ def update_policy(request):
     except Exception as e:
         traceback.print_exc()
         return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
+
 
 # @csrf_exempt
 # @require_http_methods(["POST"])

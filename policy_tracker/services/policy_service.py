@@ -84,20 +84,27 @@ class PolicyAIService:
             }, None
 
     @staticmethod
-    def format_html_with_ai(template, title, department, category):
+    def format_html_with_ai(template, title, department, category, organization_name):
         """
         Generate policy HTML content using AI based on department & category.
         """
         prompt = f"""
         Create a detailed policy document in HTML format based on {department} and {category}.
+        Read the whole {template} template provided below and use it to structure the new policy document,
+        and give your best to fill in relevant content.
+        Content must be 100 to 200 words long.
 
         IMPORTANT:
+        - Make sure the title in document matches: {title}
+        - Make sure {organization_name} is mentioned above the title.
+        - Make sure to reference the organization name: {organization_name} wherever it is possible in strong/bold text.
         - Return ONLY the HTML document.
         - Start with <!DOCTYPE html> and end with </html>.
         - Include:
             - One main heading (policy title)
             - Multiple subheadings
             - A descriptive paragraph for each subheading
+            - Create HTML structure with proper tags, try to create one table at least
         - No pagination, markdown, or explanations.
         - Do NOT repeat the title after the header section.
         - Keep formatting clean and professional.
@@ -165,7 +172,7 @@ class PolicyVersionService:
                 org_policy_id=org_policy.id,
                 version=version,
                 diff_data=diff_json,
-                status="published",
+                status="draft",
                 checkpoint_template=formatted_html,  # Initial checkpoint
                 created_at=created_at,
                 updated_by=updated_by,
@@ -194,7 +201,7 @@ class PolicyVersionService:
             org_policy_id=org_policy.id,
             version=version,
             diff_data=diff_json,
-            status="published",
+            status="draft",
             created_at=created_at,
             updated_by=updated_by,
         )
@@ -291,8 +298,8 @@ class PolicyVersionService:
 def extract_title_version_from_pdf(pdf_text):
     return PolicyAIService.extract_title_version_from_pdf(pdf_text)
 
-def format_html_with_ai(template, title, department, category):
-    return PolicyAIService.format_html_with_ai(template, title, department, category)
+def format_html_with_ai(template, title, department, category, organization_name):
+    return PolicyAIService.format_html_with_ai(template, title, department, category, organization_name)
 
 def create_or_update_policy_with_version(title, html_template, version, org, created_at, updated_by, description=None):
     return PolicyVersionService.create_or_update_policy_with_version(title, html_template, version, org, created_at, updated_by, description)
