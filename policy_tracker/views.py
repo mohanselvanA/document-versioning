@@ -127,7 +127,7 @@ def initialise_policy(request):
         
         org_id = data['organization_id']
         organization_name = None
-        organization_name_check = (Organization.objects.filter(id=uuid.UUID("2067eb5f-403b-437c-9fa7-db3fe47117d1"))).exists()
+        organization_name_check = (Organization.objects.filter(id=uuid.UUID(org_id))).exists()
         if organization_name_check == False:
             return PolicyResponseBuilder.error("Organization not found", status=404)
         else:
