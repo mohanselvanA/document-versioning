@@ -450,7 +450,7 @@ def update_policy(request):
                 org_policy.workforce_assignments = json.dumps({"assignments": workforce_assignment}, ensure_ascii=False)
                 org_policy.save()
 
-                if Employee.objects.filter(id=uuid.UUID(approver), status="active").exists():
+                if Employee.objects.filter(id=uuid.UUID(approver)).exists():
                     PolicyApprover.objects.create(
                         policy_version_id=new_policy_version_id,
                         approver_id=uuid.UUID(approver)
