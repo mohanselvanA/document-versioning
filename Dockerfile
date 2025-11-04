@@ -1,18 +1,20 @@
 # Use official Python image
 FROM python:3.10-slim
 
-# Set work directory
+# Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
+# Copy dependency file
 COPY requirements.txt .
+
+# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the code
+# Copy project files
 COPY . .
 
-# Load environment variables from .env (Docker Compose handles it)
+# Expose port
 EXPOSE 8000
 
-# Start the app
+# Default command
 CMD ["python", "app.py"]
