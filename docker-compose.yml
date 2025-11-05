@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   web:
     build: .
@@ -7,4 +9,21 @@ services:
       - .env
     volumes:
       - .:/app
+    depends_on:
+      - db
     restart: unless-stopped
+
+  db:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: stackflo_dev
+      POSTGRES_USER: stackflo
+      POSTGRES_PASSWORD: stackflo@321
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
