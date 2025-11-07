@@ -84,7 +84,7 @@ class PolicyAIService:
             }, None
 
     @staticmethod
-    def format_html_with_ai(template, title, department, category, organization_name):
+    def format_html_with_ai(template, title, department, category, organization_name, organization_logo):
         """
         Generate policy HTML content using AI based on department & category.
         """
@@ -299,8 +299,8 @@ class PolicyVersionService:
 def extract_title_version_from_pdf(pdf_text):
     return PolicyAIService.extract_title_version_from_pdf(pdf_text)
 
-def format_html_with_ai(template, title, department, category, organization_name):
-    return PolicyAIService.format_html_with_ai(template, title, department, category, organization_name)
+def format_html_with_ai(template, title, department, category, organization_name, organization_logo):
+    return PolicyAIService.format_html_with_ai(template, title, department, category, organization_name, organization_logo)
 
 def create_or_update_policy_with_version(title, html_template, version, org, created_at, updated_by, description=None):
     return PolicyVersionService.create_or_update_policy_with_version(title, html_template, version, org, created_at, updated_by, description)

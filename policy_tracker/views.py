@@ -12,6 +12,7 @@ from io import BytesIO
 from .models import PolicyTemplate, Organization, OrgPolicy, PolicyVersion, Employee, PolicyApprover
 from .services.policy_service import format_html_with_ai, reconstruct_policy_html_at_version
 from .utils.diff_utils import compute_html_diff, apply_diff
+from decouple import config, Csv
 
 
 class PolicyService:
@@ -139,6 +140,8 @@ def initialise_policy(request):
         category = data.get('category')
         version = data.get('version', '1')
         workforce_assignment = data.get('workforce_assignment')
+
+        organization_logo = (Organization.objects.get(id=uuid.UUID(org_id))).light_logo
         # approver = data.get('approver', "")
 
         # if approver!=None or approver!="":
@@ -174,7 +177,8 @@ def initialise_policy(request):
             policy_template.title, 
             department, 
             category,
-            organization_name
+            organization_name,
+            organization_logo
         )
 
         # # # Validate AI response
@@ -785,21 +789,39 @@ def render_pdf_from_html(html_source: str) -> bytes:
 @csrf_exempt
 @require_http_methods(["POST"])
 def get_policy_pdf(request):
-    """
-    Get the latest (or specific) version HTML for a policy and return as base64.
-    If version not provided, fetch the latest version from DB.
-    """
     try:
         body_content = request.body
         if isinstance(body_content, bytes):
             body_content = body_content.decode('utf-8')
 
         data = json.loads(body_content)
-        org_policy_id = "7e82e4a6-5eaf-4b65-8f3c-787fb6fa1270"
-        input_version = "1.0"
-        organization_id = "6da0fd68-d733-4378-ba35-efa4da2764e2"
-        image_url = data.get("url", "https://www.trustcloud.ai/wp-content/uploads/2025/02/TrustCloud-logo-R.svg")
-        image_url_parent = data.get("image_url_parent", "http://192.168.6.4:8001/assets/StakfloLogo-3I8JqdIK.png")
+
+        org_policy_id = data.get("org_policy_id",None)
+        if org_policy_id == None or org_policy_id == "":
+            return PolicyResponseBuilder.error("org-policy id is required in payload", status=400)
+        
+        input_version = data.get("version",None)
+        if input_version == None or input_version == "":
+            return PolicyResponseBuilder.error("version is required in payload", status=400)
+        
+        organization_id = data.get("organization_id",None)
+        if organization_id == None or organization_id == "":
+            return PolicyResponseBuilder.error("organization id is required in payload", status=400)
+        
+        try:
+            organization = Organization.objects.get(id=uuid.UUID(organization_id))
+            
+            if organization.light_logo:
+                image_url = organization.light_logo
+            elif organization.dark_logo:
+                image_url = organization.dark_logo
+            else:
+                image_url = organization.name 
+                
+        except Organization.DoesNotExist:
+            image_url = ''
+
+        image_url_parent = config('STACKFLOW_LOGO')
 
         if not org_policy_id:
             return PolicyResponseBuilder.error("org_policy_id is required in payload", status=400)
@@ -893,75 +915,75 @@ def get_policy_pdf(request):
         
         # Create HTML with professional header layout
         html_with_logo = f"""
-        <html>
-        <head>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    margin: 0;
-                    padding: 20px;
-                }}
-                .header {{
-                    margin-bottom: 30px;
-                    border-bottom: 2px solid #333;
-                    padding-bottom: 15px;
-                }}
-                .header-top {{
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: flex-start;
-                    margin-bottom: 15px;
-                }}
-                .powered-by-section {{
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    font-size: 10px;
-                    color: #666;
-                }}
-                .parent-logo {{
-                    height: 22px;
-                    width: auto;
-                }}
-                .main-logo-section {{
-                    text-align: center;
-                    flex-grow: 1;
-                }}
-                .main-logo {{
-                    height: 50px;
-                    width: auto;
-                }}
-                .policy-title {{
-                    text-align: center;
-                    font-size: 24px;
-                    font-weight: bold;
-                    margin-top: 10px;
-                    color: #333;
-                }}
-                .company-name {{
-                    text-align: center;
-                    font-size: 14px;
-                    color: #666;
-                    margin-top: 5px;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="header">
-                <div class="header-top">
-                    <div class="powered-by-section">
-                        <span>Powered by </span>
-                        <img src="{image_url_parent}" alt="Stakflo" class="parent-logo">
-                    </div>
-                    <div class="main-logo-section">
-                        <img src="{image_url}" alt="Trust Cloud" style="height: 35px; width: auto;">
-                    </div>
-                </div>
+<html>
+<head>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }}
+        .header {{
+            margin-bottom: 30px;
+            padding-bottom: 15px; /* Removed border-bottom */
+        }}
+        .header-top {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+        }}
+        .powered-by-section {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 10px;
+            color: #666;
+        }}
+        .parent-logo {{
+            height: 22px;
+            width: auto;
+        }}
+        .main-logo-section {{
+            text-align: center;
+            flex-grow: 1;
+        }}
+        .main-logo {{
+            height: 50px;
+            width: auto;
+        }}
+        .policy-title {{
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            margin-top: 10px;
+            color: #333;
+        }}
+        .company-name {{
+            text-align: center;
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-top">
+            <div class="powered-by-section">
+                <span>Powered by </span>
+                <img src="{image_url_parent}" alt="Stakflo" class="parent-logo">
             </div>
-            {current_html}
-        </body>
-        </html>
-        """
+            <div class="main-logo-section">
+                <img src="{image_url}" alt="Trust Cloud" style="height: 75px; width: auto;">
+            </div>
+        </div>
+    </div>
+    {current_html}
+</body>
+</html>
+"""
+
         
         # Convert HTML to PDF
         pdf_buffer = io.BytesIO()
@@ -986,7 +1008,6 @@ def get_policy_pdf(request):
                 "pdf_base64": pdf_base64,
                 "created_at": created_at.isoformat() if created_at else None,
                 "status": "draft",
-                "reconstruction_method": "sequential",
                 "organization_id": organization_id
             }
         )
