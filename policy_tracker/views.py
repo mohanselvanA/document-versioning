@@ -1,4 +1,5 @@
 import json
+import base64
 import uuid
 import traceback
 from django.http import JsonResponse
@@ -6,7 +7,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, connection
-
+from xhtml2pdf import pisa
+from io import BytesIO
 from .models import PolicyTemplate, Organization, OrgPolicy, PolicyVersion, Employee, PolicyApprover
 from .services.policy_service import format_html_with_ai, reconstruct_policy_html_at_version
 from .utils.diff_utils import compute_html_diff, apply_diff
@@ -733,11 +735,58 @@ def get_policy_version_html(request):
         traceback.print_exc()
         return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
 
+
+# =============================================================================
+# UNUSED VIEW FUNCTIONS (COMMENTED OUT FOR NOW)
+# =============================================================================
+
+"""
+@csrf_exempt
+@require_http_methods(["POST"])
+def legacy_policy_creation(request):
+    # Legacy policy creation endpoint - not currently used
+    pass
+
+@csrf_exempt  
+@require_http_methods(["GET"])
+def policy_approval_workflow(request):
+    # Policy approval workflow - not currently implemented
+    pass
+"""
+
+
+
+# @staticmethod
+# def get_latest_version_number(org_policy_id):
+#     """Fetch the latest version number string for a given OrgPolicy ID."""
+#     with connection.cursor() as cursor:
+#         cursor.execute("""
+#             SELECT version
+#             FROM policy_versions
+#             WHERE org_policy_id = %s
+#             ORDER BY created_at DESC
+#             LIMIT 1
+#         """, [org_policy_id])
+#         row = cursor.fetchone()
+#         return row[0] if row else None
+
+def render_pdf_from_html(html_source: str) -> bytes:
+    """
+    Converts HTML string to PDF bytes using xhtml2pdf (pisa).
+    """
+    result = BytesIO()
+    pdf = pisa.CreatePDF(src=html_source, dest=result)
+    if pdf.err:
+        raise RuntimeError(f"PDF generation failed: {pdf.err}")
+    return result.getvalue()
+
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def get_policy_pdf(request):
     """
-    Get the latest (or specific) version HTML for a policy.
+    Get the latest (or specific) version HTML for a policy and return as base64.
     If version not provided, fetch the latest version from DB.
     """
     try:
@@ -746,9 +795,11 @@ def get_policy_pdf(request):
             body_content = body_content.decode('utf-8')
 
         data = json.loads(body_content)
-        org_policy_id = data.get("org_policy_id")
-        input_version = data.get("version", None)
-        organization_id = data.get("organization_id", None)
+        org_policy_id = "7e82e4a6-5eaf-4b65-8f3c-787fb6fa1270"
+        input_version = "1.0"
+        organization_id = "6da0fd68-d733-4378-ba35-efa4da2764e2"
+        image_url = data.get("url", "https://www.trustcloud.ai/wp-content/uploads/2025/02/TrustCloud-logo-R.svg")
+        image_url_parent = data.get("image_url_parent", "http://192.168.6.4:8001/assets/StakfloLogo-3I8JqdIK.png")
 
         if not org_policy_id:
             return PolicyResponseBuilder.error("org_policy_id is required in payload", status=400)
@@ -835,19 +886,108 @@ def get_policy_pdf(request):
         else:
             status, created_at = "unknown", None
 
+        # 🟩 Convert HTML to PDF and then to base64
+        import base64
+        from xhtml2pdf import pisa
+        import io
+        
+        # Create HTML with professional header layout
+        html_with_logo = f"""
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                }}
+                .header {{
+                    margin-bottom: 30px;
+                    border-bottom: 2px solid #333;
+                    padding-bottom: 15px;
+                }}
+                .header-top {{
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-start;
+                    margin-bottom: 15px;
+                }}
+                .powered-by-section {{
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 10px;
+                    color: #666;
+                }}
+                .parent-logo {{
+                    height: 22px;
+                    width: auto;
+                }}
+                .main-logo-section {{
+                    text-align: center;
+                    flex-grow: 1;
+                }}
+                .main-logo {{
+                    height: 50px;
+                    width: auto;
+                }}
+                .policy-title {{
+                    text-align: center;
+                    font-size: 24px;
+                    font-weight: bold;
+                    margin-top: 10px;
+                    color: #333;
+                }}
+                .company-name {{
+                    text-align: center;
+                    font-size: 14px;
+                    color: #666;
+                    margin-top: 5px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <div class="header-top">
+                    <div class="powered-by-section">
+                        <span>Powered by </span>
+                        <img src="{image_url_parent}" alt="Stakflo" class="parent-logo">
+                    </div>
+                    <div class="main-logo-section">
+                        <img src="{image_url}" alt="Trust Cloud" style="height: 35px; width: auto;">
+                    </div>
+                </div>
+            </div>
+            {current_html}
+        </body>
+        </html>
+        """
+        
+        # Convert HTML to PDF
+        pdf_buffer = io.BytesIO()
+        pisa_status = pisa.CreatePDF(html_with_logo, dest=pdf_buffer)
+        
+        if pisa_status.err:
+            return PolicyResponseBuilder.error("Failed to generate PDF", status=500)
+            
+        pdf_buffer.seek(0)
+        pdf_bytes = pdf_buffer.getvalue()
+        
+        # Convert PDF to base64
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+
         # 🟩 Success response
         return PolicyResponseBuilder.success(
-            "Policy version HTML retrieved successfully",
+            "Policy PDF generated successfully",
             {
                 "org_policy_id": org_policy_id,
                 "policy_title": org_policy_title,
                 "version": target_version,
-                "html": current_html,
+                "pdf_base64": pdf_base64,
                 "created_at": created_at.isoformat() if created_at else None,
                 "status": "draft",
                 "reconstruction_method": "sequential",
-                "html_length": len(current_html),
-                "organization_id":organization_id
+                "organization_id": organization_id
             }
         )
 
@@ -858,37 +998,3 @@ def get_policy_pdf(request):
         print(f"[EXCEPTION] Internal error: {str(e)}")
         traceback.print_exc()
         return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)
-
-# =============================================================================
-# UNUSED VIEW FUNCTIONS (COMMENTED OUT FOR NOW)
-# =============================================================================
-
-"""
-@csrf_exempt
-@require_http_methods(["POST"])
-def legacy_policy_creation(request):
-    # Legacy policy creation endpoint - not currently used
-    pass
-
-@csrf_exempt  
-@require_http_methods(["GET"])
-def policy_approval_workflow(request):
-    # Policy approval workflow - not currently implemented
-    pass
-"""
-
-
-
-# @staticmethod
-# def get_latest_version_number(org_policy_id):
-#     """Fetch the latest version number string for a given OrgPolicy ID."""
-#     with connection.cursor() as cursor:
-#         cursor.execute("""
-#             SELECT version
-#             FROM policy_versions
-#             WHERE org_policy_id = %s
-#             ORDER BY created_at DESC
-#             LIMIT 1
-#         """, [org_policy_id])
-#         row = cursor.fetchone()
-#         return row[0] if row else None
