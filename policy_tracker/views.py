@@ -1,4 +1,5 @@
 import json
+import base64
 import uuid
 import traceback
 from django.http import JsonResponse
@@ -6,7 +7,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, connection
-
+from xhtml2pdf import pisa
+from io import BytesIO
 from .models import PolicyTemplate, Organization, OrgPolicy, PolicyVersion, Employee, PolicyApprover
 from .services.policy_service import format_html_with_ai, reconstruct_policy_html_at_version
 from .utils.diff_utils import compute_html_diff, apply_diff
@@ -767,3 +769,232 @@ def policy_approval_workflow(request):
 #         """, [org_policy_id])
 #         row = cursor.fetchone()
 #         return row[0] if row else None
+
+def render_pdf_from_html(html_source: str) -> bytes:
+    """
+    Converts HTML string to PDF bytes using xhtml2pdf (pisa).
+    """
+    result = BytesIO()
+    pdf = pisa.CreatePDF(src=html_source, dest=result)
+    if pdf.err:
+        raise RuntimeError(f"PDF generation failed: {pdf.err}")
+    return result.getvalue()
+
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def get_policy_pdf(request):
+    """
+    Get the latest (or specific) version HTML for a policy and return as base64.
+    If version not provided, fetch the latest version from DB.
+    """
+    try:
+        body_content = request.body
+        if isinstance(body_content, bytes):
+            body_content = body_content.decode('utf-8')
+
+        data = json.loads(body_content)
+        org_policy_id = "7e82e4a6-5eaf-4b65-8f3c-787fb6fa1270"
+        input_version = "1.0"
+        organization_id = "6da0fd68-d733-4378-ba35-efa4da2764e2"
+        image_url = data.get("url", "https://www.trustcloud.ai/wp-content/uploads/2025/02/TrustCloud-logo-R.svg")
+        image_url_parent = data.get("image_url_parent", "http://192.168.6.4:8001/assets/StakfloLogo-3I8JqdIK.png")
+
+        if not org_policy_id:
+            return PolicyResponseBuilder.error("org_policy_id is required in payload", status=400)
+
+        # Validate UUID format
+        try:
+            PolicyService.validate_uuid(org_policy_id, 'org_policy_id')
+        except ValueError:
+            return PolicyResponseBuilder.error("Invalid org_policy_id format", status=400)
+
+        # Validate OrgPolicy exists
+        org_policy_row = PolicyService.get_org_policy_by_id(org_policy_id)
+        if not org_policy_row:
+            return PolicyResponseBuilder.error("OrgPolicy not found", status=404)
+
+        org_policy_id_db, org_policy_title = org_policy_row
+
+        # 🟩 Fetch latest version (if version not given)
+        with connection.cursor() as cursor:
+            if input_version:
+                target_version = input_version
+            else:
+                cursor.execute("""
+                    SELECT version
+                    FROM policy_versions
+                    WHERE org_policy_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, [org_policy_id])
+                row = cursor.fetchone()
+                target_version = row[0] if row else None
+
+        if not target_version:
+            return PolicyResponseBuilder.error("No versions found for this policy", status=404)
+
+        # 🟩 Get all versions sequentially to reconstruct HTML
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT version, diff_data::text, checkpoint_template
+                FROM policy_versions
+                WHERE org_policy_id = %s
+                ORDER BY created_at ASC
+            """, [org_policy_id])
+            all_versions = cursor.fetchall()
+
+        if not all_versions:
+            return PolicyResponseBuilder.error("No versions found for this policy", status=404)
+
+        # 🟩 Sequential reconstruction from diffs
+        current_html = ""
+        target_found = False
+
+        for version_data in all_versions:
+            version_num, diff_data_str, checkpoint_content = version_data
+
+            # Apply diff if available
+            if diff_data_str and diff_data_str.strip():
+                try:
+                    diff_dict = json.loads(diff_data_str)
+                    current_html = apply_diff(current_html, diff_dict)
+                except Exception as e:
+                    print(f"Error applying diff for version {version_num}: {e}")
+
+            # Stop at the target version
+            if version_num == target_version:
+                target_found = True
+                break
+
+        if not target_found:
+            return PolicyResponseBuilder.error(f"Version {target_version} not found for this policy", status=404)
+
+        # 🟩 Get metadata for the target version
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT status, created_at
+                FROM policy_versions
+                WHERE org_policy_id = %s AND version = %s
+                LIMIT 1
+            """, [org_policy_id, target_version])
+            version_info = cursor.fetchone()
+
+        if version_info:
+            status, created_at = version_info
+        else:
+            status, created_at = "unknown", None
+
+        # 🟩 Convert HTML to PDF and then to base64
+        import base64
+        from xhtml2pdf import pisa
+        import io
+        
+        # Create HTML with professional header layout
+        html_with_logo = f"""
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                }}
+                .header {{
+                    margin-bottom: 30px;
+                    border-bottom: 2px solid #333;
+                    padding-bottom: 15px;
+                }}
+                .header-top {{
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: flex-start;
+                    margin-bottom: 15px;
+                }}
+                .powered-by-section {{
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 10px;
+                    color: #666;
+                }}
+                .parent-logo {{
+                    height: 22px;
+                    width: auto;
+                }}
+                .main-logo-section {{
+                    text-align: center;
+                    flex-grow: 1;
+                }}
+                .main-logo {{
+                    height: 50px;
+                    width: auto;
+                }}
+                .policy-title {{
+                    text-align: center;
+                    font-size: 24px;
+                    font-weight: bold;
+                    margin-top: 10px;
+                    color: #333;
+                }}
+                .company-name {{
+                    text-align: center;
+                    font-size: 14px;
+                    color: #666;
+                    margin-top: 5px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <div class="header-top">
+                    <div class="powered-by-section">
+                        <span>Powered by </span>
+                        <img src="{image_url_parent}" alt="Stakflo" class="parent-logo">
+                    </div>
+                    <div class="main-logo-section">
+                        <img src="{image_url}" alt="Trust Cloud" style="height: 35px; width: auto;">
+                    </div>
+                </div>
+            </div>
+            {current_html}
+        </body>
+        </html>
+        """
+        
+        # Convert HTML to PDF
+        pdf_buffer = io.BytesIO()
+        pisa_status = pisa.CreatePDF(html_with_logo, dest=pdf_buffer)
+        
+        if pisa_status.err:
+            return PolicyResponseBuilder.error("Failed to generate PDF", status=500)
+            
+        pdf_buffer.seek(0)
+        pdf_bytes = pdf_buffer.getvalue()
+        
+        # Convert PDF to base64
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+
+        # 🟩 Success response
+        return PolicyResponseBuilder.success(
+            "Policy PDF generated successfully",
+            {
+                "org_policy_id": org_policy_id,
+                "policy_title": org_policy_title,
+                "version": target_version,
+                "pdf_base64": pdf_base64,
+                "created_at": created_at.isoformat() if created_at else None,
+                "status": "draft",
+                "reconstruction_method": "sequential",
+                "organization_id": organization_id
+            }
+        )
+
+    except json.JSONDecodeError:
+        return PolicyResponseBuilder.error("Invalid JSON payload", status=400)
+
+    except Exception as e:
+        print(f"[EXCEPTION] Internal error: {str(e)}")
+        traceback.print_exc()
+        return PolicyResponseBuilder.error(f"Internal server error: {str(e)}", status=500)

@@ -92,14 +92,14 @@ class PolicyAIService:
         Create a detailed policy document in HTML format based on {department} and {category}.
         Read the whole {template} template provided below and use it to structure the new policy document,
         and give your best to fill in relevant content.
-        Content must be 100 to 200 words long.
+        
 
         IMPORTANT:
         - Make sure the title in document matches: {title}
-        - Make sure {organization_name} is mentioned above the title.
-        - Make sure to reference the organization name: {organization_name} wherever it is possible in strong/bold text.
+        - Make sure to reference the organization name: {organization_name} wherever it is possible in strong/bold text. But dont make any heading of {organization_name}
         - Return ONLY the HTML document.
         - Start with <!DOCTYPE html> and end with </html>.
+        - Make sure the html is created in such a way that, when I convert it into pdf, and if it is multi paged pdf, it should look very much well structured and professional. No need of pagination tags in html.
         - Include:
             - One main heading (policy title)
             - Multiple subheadings
@@ -108,6 +108,7 @@ class PolicyAIService:
         - No pagination, markdown, or explanations.
         - Do NOT repeat the title after the header section.
         - Keep formatting clean and professional.
+        - Content must be 1000 to 1200 words long.
         """
 
         payload = {"query": prompt}
