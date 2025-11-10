@@ -108,8 +108,8 @@ class PolicyAIService:
         - No pagination, markdown, or explanations.
         - Do NOT repeat the title after the header section.
         - Keep formatting clean and professional.
-        - Content must be 1000 to 1200 words long.
-        - Utmost importtant : Description under each heading must be atleast 200 words long.
+        - Content must be 100 to 120 words long.
+        - Utmost importtant : Description under each heading must be atleast 20 words long.
         """
 
         payload = {"query": prompt}
