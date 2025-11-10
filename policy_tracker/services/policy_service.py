@@ -109,6 +109,7 @@ class PolicyAIService:
         - Do NOT repeat the title after the header section.
         - Keep formatting clean and professional.
         - Content must be 1000 to 1200 words long.
+        - Utmost importtant : Description under each heading must be atleast 200 words long.
         """
 
         payload = {"query": prompt}
